@@ -112,9 +112,9 @@ class Conductor:
             result = ExecutionResult(status=RunStatus.FAILED, error=repr(exc))
         finally:
             keep_alive.cancel()
-            # The keep-alive should never die on its own, but even if it did its exception must not
-            # block finalize — losing a completed result is worse than a stale lease.
-            with contextlib.suppress(BaseException):
+            # The guarded loop only ever exits via this cancellation — swallow it so a stale lease
+            # can never block finalize (losing a completed result is worse).
+            with contextlib.suppress(asyncio.CancelledError):
                 await keep_alive
 
         async with tenant_session(self._app_sm, ref.workspace_id) as session:
