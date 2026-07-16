@@ -46,6 +46,7 @@ class Run(Base):
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"))
     directive: Mapped[str] = mapped_column(String)
     idempotency_key: Mapped[str] = mapped_column(String)
+    engine_task_id: Mapped[str | None] = mapped_column(String, nullable=True)  # chorus root task
     status: Mapped[str] = mapped_column(String, default=RunStatus.QUEUED)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     counts: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

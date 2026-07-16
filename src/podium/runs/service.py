@@ -14,7 +14,7 @@ from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from podium.runs.models import Run, RunStatus
+from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
 
 _CONDUCTOR_CHANNEL = "podium_conductor"
 
@@ -170,6 +170,27 @@ async def expired_lease_refs(session: AsyncSession) -> list[tuple[str, str]]:
     """(run_id, workspace_id) of running runs whose lease has lapsed — a crashed owner to reclaim."""
     stmt = select(Run.id, Run.workspace_id).where(
         Run.status == RunStatus.RUNNING, Run.lease_expires_at < _now()
+    )
+    return [(r[0], r[1]) for r in (await session.execute(stmt)).all()]
+
+
+async def set_engine_task_id(session: AsyncSession, run_id: str, engine_task_id: str) -> bool:
+    """Record the chorus root task for a run (written on submit). RLS scopes it to the tenant."""
+    stmt = (
+        update(Run)
+        .where(Run.id == run_id)
+        .values(engine_task_id=engine_task_id, updated_at=_now())
+        .returning(Run.id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def active_engine_tasks(session: AsyncSession, company_id: str) -> list[tuple[str, str]]:
+    """(run_id, engine_task_id) for a company's non-terminal runs — the mirror's rehydration source."""
+    stmt = select(Run.id, Run.engine_task_id).where(
+        Run.company_id == company_id,
+        Run.engine_task_id.is_not(None),
+        Run.status.not_in(TERMINAL_STATUSES),
     )
     return [(r[0], r[1]) for r in (await session.execute(stmt)).all()]
 

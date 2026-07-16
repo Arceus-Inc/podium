@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.db import tenant_session
 from podium.events import EVENTS_CHANNEL, Event, append_event, max_company_seq
+from podium.runs import active_engine_tasks
 
 
 class EventMirror:
@@ -41,6 +42,13 @@ class EventMirror:
     def register_run(self, *, run_id: str, engine_task_id: str) -> None:
         """Tell the mirror which podium run a chorus root task belongs to (for event routing)."""
         self._task_to_run[engine_task_id] = run_id
+
+    async def rehydrate(self) -> None:
+        """Rebuild the routing map from `runs.engine_task_id` — call on (re)host so events for a run
+        that was in flight at restart are still attributed instead of falling to company-level."""
+        async with tenant_session(self._sm, self._workspace_id) as session:
+            for run_id, engine_task_id in await active_engine_tasks(session, self._company_id):
+                self._task_to_run[engine_task_id] = run_id
 
     async def record(
         self,
