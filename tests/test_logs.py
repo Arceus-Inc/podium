@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from podium.logs import RunLogStore, excerpt_payload
 
 
@@ -17,6 +19,13 @@ def test_append_read_and_digest(tmp_path: Path) -> None:
     size, sha = store.digest("run_1")
     assert size == len("hello world →".encode())
     assert len(sha) == 64  # sha256 hex
+
+
+def test_rejects_unsafe_run_ids(tmp_path: Path) -> None:
+    store = RunLogStore(tmp_path)
+    for bad in ["../etc/passwd", "a/b", "..\\x"]:
+        with pytest.raises(ValueError, match="unsafe run id"):
+            store.exists(bad)
 
 
 def test_ref_is_stable_per_run(tmp_path: Path) -> None:

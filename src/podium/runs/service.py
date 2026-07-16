@@ -175,10 +175,10 @@ async def expired_lease_refs(session: AsyncSession) -> list[tuple[str, str]]:
 
 
 async def set_log_ref(session: AsyncSession, run_id: str, log_ref: str) -> bool:
-    """Point a run at its durable log file (set once the run first produces transcript text)."""
+    """Point a run at its durable log file — guarded so it's set exactly once (idempotent on retry)."""
     stmt = (
         update(Run)
-        .where(Run.id == run_id)
+        .where(Run.id == run_id, Run.log_ref.is_(None))
         .values(log_ref=log_ref, updated_at=_now())
         .returning(Run.id)
     )

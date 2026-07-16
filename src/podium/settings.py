@@ -33,7 +33,10 @@ class Settings(BaseSettings):
     model_base_url: str = ""
     model_deployment: str = ""
     workdir: Path = Path(".podium")
-    log_dir: Path = Path(".podium/logs")  # durable run transcripts (file per run)
+    # Durable run transcripts (file per run). The conductor writes these and the api reads them, so
+    # both MUST share this path (dev-embedded or a shared volume); across hosts without shared storage
+    # /logs 404s until the deferred object-store mirror lands.
+    log_dir: Path = Path(".podium/logs")
     conductor_embedded: bool = False  # dev: run the conductor inside the api lifespan
     conductor_control_database_url: str = ""  # empty → same as database_url
     conductor_lease_seconds: int = 300

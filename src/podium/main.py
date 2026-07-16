@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import structlog
 from fastapi import FastAPI, Response
 from sqlalchemy import text
 
@@ -45,6 +46,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await broadcaster.start()
     app.state.broadcaster = broadcaster
     app.state.log_store = RunLogStore(settings.log_dir)
+    structlog.get_logger("podium").info(
+        "log_store_ready",
+        log_dir=str(settings.log_dir),
+        note="conductor and api must share this path or /logs 404s across hosts",
+    )
 
     conductor_stop: asyncio.Event | None = None
     conductor_task: asyncio.Task[None] | None = None

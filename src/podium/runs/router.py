@@ -95,9 +95,7 @@ async def logs(
         run = await get_run(session, run_id)  # RLS hides a foreign run → None → 404
     if run is None or run.log_ref is None or not store.exists(run_id):
         raise HTTPException(status_code=404, detail="no logs for this run")
-    size, sha256 = store.digest(run_id)
+    data, sha256 = store.load(run_id)  # single read; Starlette sets Content-Length from the bytes
     return Response(
-        content=store.read(run_id),
-        media_type="text/plain; charset=utf-8",
-        headers={"X-Log-Sha256": sha256, "Content-Length": str(size)},
+        content=data, media_type="text/plain; charset=utf-8", headers={"X-Log-Sha256": sha256}
     )

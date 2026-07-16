@@ -53,6 +53,10 @@ async def test_large_text_is_split_to_store_and_excerpt(
     assert store.read(run_id) == big  # full transcript in the file
     assert run is not None and run.log_ref == store.ref(run_id)  # pointer set on the run
 
+    # A second large text event accumulates in the same file; the pointer is set only once.
+    await mirror.record(type="run.text", payload={"text": "y" * 300}, task_id="t")
+    assert store.read(run_id) == big + "y" * 300
+
 
 async def test_short_text_stays_in_the_row_no_log(
     sessionmaker: async_sessionmaker[AsyncSession],
