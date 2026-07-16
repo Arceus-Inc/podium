@@ -56,3 +56,16 @@ async def list_run_events(
         .limit(limit)
     )
     return (await session.execute(stmt)).scalars().all()
+
+
+async def list_company_events(
+    session: AsyncSession, company_id: str, *, after: int, limit: int
+) -> Sequence[Event]:
+    """A company's events with seq > `after`, ordered — the SSE replay/tail read. RLS scopes it."""
+    stmt = (
+        select(Event)
+        .where(Event.company_id == company_id, Event.seq > after)
+        .order_by(Event.seq)
+        .limit(limit)
+    )
+    return (await session.execute(stmt)).scalars().all()

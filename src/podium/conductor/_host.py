@@ -27,15 +27,17 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
         pool_size=settings.conductor_batch_size,
         max_overflow=settings.conductor_batch_size,
     )
+    app_sessionmaker = make_sessionmaker(app_engine)
     host = CompanyGraphHost(
         api_key=settings.model_api_key,
         base_url=settings.model_base_url,
         deployment=settings.model_deployment,
         workdir=Path(settings.workdir),
+        app_sessionmaker=app_sessionmaker,
     )
     conductor = Conductor(
         control_sessionmaker=make_sessionmaker(control_engine),
-        app_sessionmaker=make_sessionmaker(app_engine),
+        app_sessionmaker=app_sessionmaker,
         executor=ChorusRunExecutor(host),
         worker_id=settings.instance_id,
         lease_seconds=settings.conductor_lease_seconds,
@@ -44,6 +46,7 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
     )
 
     async def aclose() -> None:
+        await host.aclose()  # stop per-company event ingests
         await control_engine.dispose()
         await app_engine.dispose()
 

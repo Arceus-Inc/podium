@@ -38,7 +38,18 @@ def database_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     data = tmp_path_factory.mktemp("pgdata")
     env = {**os.environ, "LC_ALL": "C"}
     subprocess.run(
-        [str(PG_BIN / "initdb"), "-D", str(data), "-U", "postgres", "--auth=trust"],
+        # UTF8 encoding (real event payloads carry model Unicode); locale C keeps the PG18/macOS
+        # 'multithreaded postmaster' workaround while allowing UTF8 storage.
+        [
+            str(PG_BIN / "initdb"),
+            "-D",
+            str(data),
+            "-U",
+            "postgres",
+            "--auth=trust",
+            "--encoding=UTF8",
+            "--locale=C",
+        ],
         check=True,
         capture_output=True,
         env=env,

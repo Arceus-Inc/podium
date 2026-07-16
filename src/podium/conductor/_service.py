@@ -102,6 +102,7 @@ class Conductor:
         keep_alive = asyncio.create_task(self._renew_lease_loop(ref))
         try:
             result = await self._executor.execute(
+                run_id=ref.id,
                 workspace_id=ref.workspace_id,
                 company_id=ref.company_id,
                 directive=ref.directive,

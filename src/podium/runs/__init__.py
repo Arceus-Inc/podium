@@ -5,6 +5,7 @@ from __future__ import annotations
 from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
 from podium.runs.service import (
     RunRef,
+    active_engine_tasks,
     claim_queued_run,
     create_run,
     expired_lease_refs,
@@ -15,6 +16,7 @@ from podium.runs.service import (
     reclaim_run,
     renew_lease,
     request_cancel,
+    set_engine_task_id,
 )
 
 __all__ = [
@@ -22,6 +24,7 @@ __all__ = [
     "Run",
     "RunRef",
     "RunStatus",
+    "active_engine_tasks",
     "claim_queued_run",
     "create_run",
     "expired_lease_refs",
@@ -32,4 +35,5 @@ __all__ = [
     "reclaim_run",
     "renew_lease",
     "request_cancel",
+    "set_engine_task_id",
 ]

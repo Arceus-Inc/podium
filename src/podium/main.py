@@ -14,6 +14,7 @@ from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
 from podium.db import make_engine, make_sessionmaker
+from podium.events import Broadcaster
 from podium.events.router import router as events_router
 from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
@@ -39,6 +40,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.engine = engine
     app.state.sessionmaker = make_sessionmaker(engine)
 
+    broadcaster = Broadcaster.from_url(settings.database_url)
+    await broadcaster.start()
+    app.state.broadcaster = broadcaster
+
     conductor_stop: asyncio.Event | None = None
     conductor_task: asyncio.Task[None] | None = None
     conductor_close: Callable[[], Awaitable[None]] | None = None
@@ -55,6 +60,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await conductor_task
         if conductor_close is not None:
             await conductor_close()
+        await broadcaster.stop()
         await engine.dispose()
 
 

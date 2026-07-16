@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from podium.conductor._executor import CancelCheck, ExecutionResult, RunExecutor
-from podium.conductor._mirror import EVENTS_CHANNEL, EventMirror
+from podium.conductor._ingest import EventIngest
+from podium.conductor._mirror import EventMirror
 from podium.conductor._service import Conductor
 from podium.conductor.commands import enqueue_command, mark_consumed, pending_commands
 from podium.conductor.models import Command
 
 __all__ = [
-    "EVENTS_CHANNEL",
     "CancelCheck",
     "Command",
     "Conductor",
+    "EventIngest",
     "EventMirror",
     "ExecutionResult",
     "RunExecutor",
