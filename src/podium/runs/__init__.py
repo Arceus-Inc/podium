@@ -17,6 +17,7 @@ from podium.runs.service import (
     renew_lease,
     request_cancel,
     set_engine_task_id,
+    set_log_ref,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     "renew_lease",
     "request_cancel",
     "set_engine_task_id",
+    "set_log_ref",
 ]

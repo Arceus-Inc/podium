@@ -174,6 +174,17 @@ async def expired_lease_refs(session: AsyncSession) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in (await session.execute(stmt)).all()]
 
 
+async def set_log_ref(session: AsyncSession, run_id: str, log_ref: str) -> bool:
+    """Point a run at its durable log file (set once the run first produces transcript text)."""
+    stmt = (
+        update(Run)
+        .where(Run.id == run_id)
+        .values(log_ref=log_ref, updated_at=_now())
+        .returning(Run.id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
 async def set_engine_task_id(session: AsyncSession, run_id: str, engine_task_id: str) -> bool:
     """Record the chorus root task for a run (written on submit). RLS scopes it to the tenant."""
     stmt = (
