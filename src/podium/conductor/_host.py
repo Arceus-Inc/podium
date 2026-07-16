@@ -13,6 +13,7 @@ from pathlib import Path
 from podium.conductor._chorus_executor import ChorusRunExecutor, CompanyGraphHost
 from podium.conductor._service import Conductor
 from podium.db import make_engine, make_sessionmaker
+from podium.logs import RunLogStore
 from podium.settings import Settings
 
 
@@ -34,6 +35,7 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
         deployment=settings.model_deployment,
         workdir=Path(settings.workdir),
         app_sessionmaker=app_sessionmaker,
+        log_store=RunLogStore(Path(settings.log_dir)),
     )
     conductor = Conductor(
         control_sessionmaker=make_sessionmaker(control_engine),

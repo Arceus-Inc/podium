@@ -22,6 +22,7 @@ from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
 from podium.db import tenant_session
+from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id
 
 _TERMINAL: dict[TaskStatus, RunStatus] = {
@@ -50,12 +51,14 @@ class CompanyGraphHost:
         deployment: str,
         workdir: Path,
         app_sessionmaker: async_sessionmaker[AsyncSession],
+        log_store: RunLogStore,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._deployment = deployment
         self._workdir = workdir
         self._app_sm = app_sessionmaker
+        self._log_store = log_store
         self._runtimes: dict[str, _CompanyRuntime] = {}
 
     async def ensure(self, company_id: str, workspace_id: str) -> _CompanyRuntime:
@@ -74,7 +77,12 @@ class CompanyGraphHost:
         # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
         # workforce from the company config.
         worker = graph.org.hire(name="Ace", role="backend_engineer")
-        mirror = EventMirror(self._app_sm, company_id=company_id, workspace_id=workspace_id)
+        mirror = EventMirror(
+            self._app_sm,
+            company_id=company_id,
+            workspace_id=workspace_id,
+            log_store=self._log_store,
+        )
         await mirror.rehydrate()  # pick up runs already in flight from a prior conductor
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()

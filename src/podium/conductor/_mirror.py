@@ -19,7 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.db import tenant_session
 from podium.events import EVENTS_CHANNEL, Event, append_event, max_company_seq
-from podium.runs import active_engine_tasks
+from podium.logs import RunLogStore, excerpt_payload
+from podium.runs import active_engine_tasks, set_log_ref
 
 
 class EventMirror:
@@ -29,10 +30,17 @@ class EventMirror:
         *,
         company_id: str,
         workspace_id: str,
+        log_store: RunLogStore | None = None,
+        excerpt_chars: int = 2000,
     ) -> None:
         self._sm = sessionmaker
         self._company_id = company_id
         self._workspace_id = workspace_id
+        self._log_store = log_store
+        self._excerpt_chars = excerpt_chars
+        # ponytail: one short id per run that has produced logs — bounded by runs on this company
+        # graph's lifetime (negligible), and only an optimization (set_log_ref is guarded anyway).
+        self._logged_runs: set[str] = set()
         self._next_seq: int | None = None
         self._task_to_run: dict[str, str] = {}
         self._lock = (
@@ -66,6 +74,13 @@ class EventMirror:
                 if seq is None:
                     seq = await max_company_seq(session, self._company_id) + 1
                 run_id = self._task_to_run.get(task_id) if task_id is not None else None
+                # Blobs out: a big transcript goes to the log file; only an excerpt lands in the row.
+                stored_payload = payload
+                full_text: str | None = None
+                if self._log_store is not None and run_id is not None:
+                    stored_payload, full_text = excerpt_payload(
+                        payload, max_chars=self._excerpt_chars
+                    )
                 event = await append_event(
                     session,
                     company_id=self._company_id,
@@ -74,13 +89,25 @@ class EventMirror:
                     run_id=run_id,
                     type=type,
                     employee_id=employee_id,
-                    payload=payload,
+                    payload=stored_payload,
                     created_at=at or datetime.now(UTC),
                 )
+                if (
+                    full_text is not None
+                    and run_id is not None
+                    and self._log_store is not None
+                    and run_id not in self._logged_runs  # skip the write once we've pointed the run
+                ):
+                    # Guarded (log_ref IS NULL) too, so eviction/retry can't double-set.
+                    await set_log_ref(session, run_id, self._log_store.ref(run_id))
+                    self._logged_runs.add(run_id)
                 # A collision here means two mirrors write one company — a violated invariant, not
                 # a retry case: this mirror is meant to be the company's single writer.
                 await _notify(session, self._company_id, seq, run_id, type)
-            # Advance ONLY after the transaction committed — a failed commit reuses this seq (no gap).
+            # Only after the transaction committed: advance seq (a failed commit reuses it — no gap)
+            # and append to the log file (a rolled-back tx never appends — no duplicate on retry).
+            if full_text is not None and run_id is not None and self._log_store is not None:
+                self._log_store.append(run_id, full_text)
             self._next_seq = seq + 1
             return event
 
