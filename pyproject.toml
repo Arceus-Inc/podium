@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "podium"
+version = "0.1.0"
+description = "Podium — the Arceus product backend: the stage the AI-company engine performs on. Composition root that assembles dream + chorus + lattice + horizon into one running company."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "Arceus-Inc" }]
+dependencies = [
+  # The four engine repos. This package is the ONE production module allowed to import
+  # both chorus and horizon (CON-001 exempts composition roots by name, not by accident).
+  "dream",
+  "chorus",
+  "lattice",
+  "horizon",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.6",
+  "mypy>=1.11",
+]
+
+# Sibling checkouts during local development, mirroring the convention the four repos already use.
+# ponytail: path deps; switch to git refs when this deploys off this machine.
+[tool.uv.sources]
+dream = { path = "../Harness", editable = true }
+chorus = { path = "../chorus", editable = true }
+lattice = { path = "../lattice", editable = true }
+horizon = { path = "../horizon", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/company"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["company"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["-q", "--strict-markers"]
