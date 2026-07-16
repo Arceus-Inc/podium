@@ -74,6 +74,10 @@ mypy_path = "src"
 module = ["tests.*"]
 disallow_untyped_defs = false
 
+[[tool.mypy.overrides]]
+module = ["asyncpg.*"]  # asyncpg ships no py.typed
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

@@ -18,9 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.db import tenant_session
-from podium.events import Event, append_event, max_company_seq
-
-EVENTS_CHANNEL = "podium_events"
+from podium.events import EVENTS_CHANNEL, Event, append_event, max_company_seq
 
 
 class EventMirror:
