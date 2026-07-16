@@ -175,6 +175,35 @@ Dockerfile              # uv multi-stage; api and conductor share the image
 - **Deferred**: Redis/broadcaster if LISTEN/NOTIFY saturates; OTel; object-store mirror for
   logs (pointer schema ships in M3, S3 wiring later); multi-shard conductor placement.
 
+## Build status (updated 2026-07-16)
+
+**M0 — foundations: DONE.** `src/podium/` domain-package layout (chorus/horizon house style; `db/`
+as a separate infra package with `_base`/`_session`/`_tenant`). SQLAlchemy 2.0 async + asyncpg +
+Alembic (naming conventions), pydantic-settings, structlog, `/healthz`+`/readyz` (readyz hits the
+DB). The load-bearing primitive is `db.tenant_session` — sets `app.workspace_id` via
+`set_config(:key,:val,true)` (bind param, transaction-local, no pool leak). Alembic models are
+collected via `db/metadata.py` (import-per-domain aggregator). Gate runs against a **real** ephemeral
+PostgreSQL 18 cluster (initdb+pg_ctl in a tmpdir, `LC_ALL=C`, no Docker) — `tests/conftest.py`.
+
+**M1 — auth + tenancy hard walls: DONE** (built in three TDD slices):
+- **M1a (RLS walls)**: non-superuser `podium_app` role + `ENABLE`+`FORCE ROW LEVEL SECURITY` on
+  every tenant table with `USING/WITH CHECK (col = current_setting('app.workspace_id', true))`.
+  `companies` table (workspace_id FK, composite index). Workspace creation is control-plane
+  (superuser); tenant tables are `podium_app`-only. Proof: cross-tenant read/insert denied, no-GUC
+  session sees zero rows (fail closed), app role can't create workspaces.
+- **M1b-1 (auth core + HTTP)**: `api_keys` (auth-bootstrap table, **no RLS**, resolved by unguessable
+  sha256 hash). `Actor`/`Resource` model, central pure `decide()` (never throws), fail-closed
+  `require_actor` dependency (401). Companies HTTP CRUD wired `require_actor → decide → tenant_session`
+  — the query always runs in `actor.workspace_id`, never the raw path. **M1 exit proven over HTTP:
+  cross-tenant fails at BOTH decide() (403) and RLS (404).**
+- **M1b-2 (users + JWT + rate limit)**: `users` table (RLS'd), `api_keys.user_id` link → `user`
+  actor. Per-company JWT via `HMAC-SHA256(master,"jwt:{instance}:{company}")` derived keys (PyJWT
+  HS256) — a token can't verify under another company's/instance's key. In-memory sliding-window
+  per-actor rate limit (injected clock; `ponytail:` per-process, Redis when multi-worker) → 429.
+
+Gate everywhere: `ruff format` + `ruff check` + `mypy --strict` + `pytest` (40 tests) green on real
+Postgres. Migrations 0001–0004. **Next: M2 (conductor).**
+
 ## M7 spec — tenant-aware chorus ledger (paperclip-style shared schema)
 
 **Status: committed phase, not a maybe.** Lands in the chorus repo after M5/M6, behind
