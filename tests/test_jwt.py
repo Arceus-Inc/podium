@@ -42,6 +42,13 @@ def test_token_does_not_verify_under_another_companys_key() -> None:
         verify_company_token(token, key_b)
 
 
+def test_token_with_wrong_issuer_is_rejected() -> None:
+    key = derive_signing_key(_MASTER, _INSTANCE, "cmp_a")
+    forged = jwt.encode({"iss": "evil", "company_id": "cmp_a"}, key, algorithm="HS256")
+    with pytest.raises(jwt.InvalidIssuerError):
+        verify_company_token(forged, key)
+
+
 def test_expired_token_is_rejected() -> None:
     key = derive_signing_key(_MASTER, _INSTANCE, "cmp_a")
     issued = datetime.now(UTC) - timedelta(hours=2)

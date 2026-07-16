@@ -24,6 +24,7 @@ from podium.runs import (
     get_run,
     queued_run_refs,
     reclaim_run,
+    renew_lease,
 )
 
 _log = structlog.get_logger("podium.conductor")
@@ -40,28 +41,37 @@ class Conductor:
         lease_seconds: int = 300,
         batch_size: int = 10,
         poll_interval: float = 5.0,
+        max_concurrent: int | None = None,
     ) -> None:
         self._control_sm = control_sessionmaker
         self._app_sm = app_sessionmaker
         self._executor = executor
         self._worker_id = worker_id
         self._lease_seconds = lease_seconds
+        self._renew_interval = max(1, lease_seconds // 3)  # renew well before the lease lapses
         self._batch_size = batch_size
+        self._max_concurrent = max_concurrent or batch_size
         self._poll_interval = poll_interval
 
     async def dispatch_once(self) -> int:
-        """Reclaim expired leases, then claim and run each queued run. Returns the number run."""
+        """Reclaim expired leases, then claim + run queued runs concurrently. Returns the number run."""
         await self._reclaim_expired()
         async with self._control_sm() as session:
             refs = await queued_run_refs(session, limit=self._batch_size)
 
-        dispatched = 0
-        for ref in refs:
-            if not await self._claim(ref):
-                continue  # a 409 — another worker owns it; don't retry
-            await self._process(ref)
-            dispatched += 1
-        return dispatched
+        semaphore = asyncio.Semaphore(self._max_concurrent)
+
+        async def claim_and_run(ref: RunRef) -> bool:
+            async with semaphore:
+                if not await self._claim(ref):
+                    return False  # a 409 — another worker owns it; don't retry
+                await self._process(ref)
+                return True
+
+        results = await asyncio.gather(
+            *(claim_and_run(ref) for ref in refs), return_exceptions=True
+        )
+        return sum(1 for result in results if result is True)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         """Poll loop (the correctness floor). NOTIFY wiring layers on top of this same dispatch."""
@@ -85,6 +95,8 @@ class Conductor:
                 run = await get_run(session, ref.id)
                 return run is not None and run.status == RunStatus.CANCELING
 
+        # Keep the lease alive for the whole run so a peer's reclaim can't double-dispatch it.
+        keep_alive = asyncio.create_task(self._renew_lease_loop(ref))
         try:
             result = await self._executor.execute(
                 workspace_id=ref.workspace_id,
@@ -95,11 +107,23 @@ class Conductor:
         except Exception as exc:  # executor failure is a failed run, not a dead worker
             _log.exception("run_execution_failed", run_id=ref.id)
             result = ExecutionResult(status=RunStatus.FAILED, error=repr(exc))
+        finally:
+            keep_alive.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await keep_alive
 
         async with tenant_session(self._app_sm, ref.workspace_id) as session:
             await finalize_run(
                 session, ref.id, owner=self._worker_id, status=result.status, error=result.error
             )
+
+    async def _renew_lease_loop(self, ref: RunRef) -> None:
+        while True:
+            await asyncio.sleep(self._renew_interval)
+            async with tenant_session(self._app_sm, ref.workspace_id) as session:
+                await renew_lease(
+                    session, ref.id, owner=self._worker_id, lease_seconds=self._lease_seconds
+                )
 
     async def _reclaim_expired(self) -> None:
         async with self._control_sm() as session:

@@ -87,6 +87,19 @@ async def test_created_company_returns_location_header(
     assert resp.headers["Location"] == f"/v1/workspaces/{ws_id}/companies/{resp.json()['id']}"
 
 
+async def test_company_response_omits_internal_config(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    ws_id, token = await _ws_key(sessionmaker)
+    resp = await api.post(
+        f"/v1/workspaces/{ws_id}/companies",
+        json={"slug": "acme", "name": "Acme", "config": {"secret": "shh"}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 201
+    assert "config" not in resp.json()  # internal config never echoed
+
+
 async def test_rate_limited_response_sets_retry_after(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],

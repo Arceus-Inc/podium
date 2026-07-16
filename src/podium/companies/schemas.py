@@ -23,5 +23,6 @@ class CompanyOut(BaseModel):
     name: str
     state: str
     ledger_backend: str
-    config: dict[str, Any]
     created_at: datetime
+    # `config` is intentionally NOT exposed: it may hold per-company signing-key derivation inputs
+    # and other internal material. Never echo it over the API.

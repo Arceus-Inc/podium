@@ -13,6 +13,7 @@ from podium.runs.service import (
     list_runs,
     queued_run_refs,
     reclaim_run,
+    renew_lease,
     request_cancel,
 )
 
@@ -29,5 +30,6 @@ __all__ = [
     "list_runs",
     "queued_run_refs",
     "reclaim_run",
+    "renew_lease",
     "request_cancel",
 ]

@@ -12,6 +12,7 @@ from typing import Any
 import jwt
 
 _ALGORITHM = "HS256"
+_ISSUER = "podium"
 
 
 def derive_signing_key(master_secret: str, instance_id: str, company_id: str) -> str:
@@ -29,6 +30,7 @@ def issue_company_token(
 ) -> str:
     issued = issued_at or datetime.now(UTC)
     claims = {
+        "iss": _ISSUER,
         "sub": subject,
         "company_id": company_id,
         "iat": issued,
@@ -38,5 +40,5 @@ def issue_company_token(
 
 
 def verify_company_token(token: str, signing_key: str) -> dict[str, Any]:
-    """Decode and verify signature + expiry. Raises jwt.PyJWTError subclasses on any failure."""
-    return jwt.decode(token, signing_key, algorithms=[_ALGORITHM])
+    """Decode and verify signature + expiry + issuer. Raises jwt.PyJWTError on any failure."""
+    return jwt.decode(token, signing_key, algorithms=[_ALGORITHM], issuer=_ISSUER)

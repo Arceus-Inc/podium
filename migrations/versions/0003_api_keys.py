@@ -40,11 +40,12 @@ def upgrade() -> None:
     )
     op.create_index("ix_api_keys_workspace_id", "api_keys", ["workspace_id"])
     # No RLS: keys are resolved by their unguessable hash before tenant context exists. The app role
-    # reads them (lookup) and writes them (issue keys for its own workspace, guarded at the app layer).
-    op.execute("GRANT SELECT, INSERT, UPDATE ON api_keys TO podium_app")
+    # only READS them (lookup) — issuing keys is a control-plane (superuser) operation, so the runtime
+    # role has no write surface on this table.
+    op.execute("GRANT SELECT ON api_keys TO podium_app")
 
 
 def downgrade() -> None:
-    op.execute("REVOKE SELECT, INSERT, UPDATE ON api_keys FROM podium_app")
+    op.execute("REVOKE SELECT ON api_keys FROM podium_app")
     op.drop_index("ix_api_keys_workspace_id", table_name="api_keys")
     op.drop_table("api_keys")

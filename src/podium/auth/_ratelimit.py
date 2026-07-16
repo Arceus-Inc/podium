@@ -24,10 +24,13 @@ class SlidingWindowRateLimiter:
         max_requests: int,
         window_seconds: float,
         clock: Callable[[], float] = time.monotonic,
+        sweep_every: int = 1024,
     ) -> None:
         self._max = max_requests
         self._window = window_seconds
         self._clock = clock
+        self._sweep_every = sweep_every
+        self._ops = 0
         self._hits: dict[str, list[float]] = {}
 
     @property
@@ -35,7 +38,15 @@ class SlidingWindowRateLimiter:
         """Whole seconds a blocked caller should wait — the window length, rounded up."""
         return max(1, int(self._window))
 
+    @property
+    def tracked_keys(self) -> int:
+        return len(self._hits)
+
     def allow(self, key: str) -> bool:
+        self._ops += 1
+        if self._ops >= self._sweep_every:  # bounded memory: drop keys with no live hits
+            self._evict_stale()
+            self._ops = 0
         now = self._clock()
         cutoff = now - self._window
         recent = [t for t in self._hits.get(key, []) if t > cutoff]
@@ -45,6 +56,14 @@ class SlidingWindowRateLimiter:
         recent.append(now)
         self._hits[key] = recent
         return True
+
+    def _evict_stale(self) -> None:
+        cutoff = self._clock() - self._window
+        self._hits = {
+            key: live
+            for key, hits in self._hits.items()
+            if (live := [t for t in hits if t > cutoff])
+        }
 
 
 def get_rate_limiter(request: Request) -> SlidingWindowRateLimiter:

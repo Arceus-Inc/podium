@@ -47,6 +47,8 @@ class CompanyGraphHost:
                     company_id=company_id,
                 )
             )
+            # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
+            # workforce from the company config.
             worker = graph.org.hire(name="Ace", role="backend_engineer")
             self._graphs[company_id] = graph
             self._assignee[company_id] = worker.name
@@ -73,4 +75,7 @@ class ChorusRunExecutor:
                 mapped = _TERMINAL[current.status]
                 error = "task rejected" if mapped is RunStatus.FAILED else None
                 return ExecutionResult(status=mapped, error=error)
+        # ponytail: on timeout the chorus task is left in-progress in its ledger (an orphan). chorus
+        # has no per-task cancel today (only whole-heartbeat stop, which would kill sibling runs);
+        # wire a real interrupt here when chorus exposes one.
         return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")

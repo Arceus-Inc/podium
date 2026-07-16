@@ -127,6 +127,19 @@ async def finalize_run(
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
+async def renew_lease(
+    session: AsyncSession, run_id: str, *, owner: str, lease_seconds: int
+) -> bool:
+    """Extend the lease on a run this worker still owns and is still running. False if it lost it."""
+    stmt = (
+        update(Run)
+        .where(Run.id == run_id, Run.owner == owner, Run.status == RunStatus.RUNNING)
+        .values(lease_expires_at=_now() + timedelta(seconds=lease_seconds), updated_at=_now())
+        .returning(Run.id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
 async def request_cancel(session: AsyncSession, run_id: str) -> bool:
     """Move a queued/running run to `canceling`. False if it is already terminal (or canceling)."""
     stmt = (

@@ -33,6 +33,19 @@ def test_keys_are_independent() -> None:
     assert limiter.allow("a") is False
 
 
+def test_stale_keys_are_evicted_so_memory_stays_bounded() -> None:
+    now = {"t": 0.0}
+    limiter = SlidingWindowRateLimiter(
+        max_requests=5, window_seconds=10, clock=lambda: now["t"], sweep_every=3
+    )
+    limiter.allow("a")
+    limiter.allow("b")  # two one-off keys tracked at t=0
+    assert limiter.tracked_keys == 2
+    now["t"] = 100.0  # far past the window
+    limiter.allow("c")  # third op → triggers a sweep, dropping the now-stale a and b
+    assert limiter.tracked_keys == 1  # only the live key remains
+
+
 async def test_http_returns_429_over_limit(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],

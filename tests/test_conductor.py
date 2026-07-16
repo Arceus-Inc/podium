@@ -162,3 +162,26 @@ async def test_second_dispatch_finds_no_work(
     conductor = _conductor(sessionmaker, app_sessionmaker, _FakeExecutor())
     assert await conductor.dispatch_once() == 1
     assert await conductor.dispatch_once() == 0  # nothing left queued
+
+
+async def test_dispatches_a_batch_concurrently(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessionmaker() as s, s.begin():
+        ws = await create_workspace(s, name="A", slug="a")
+        company = await create_company(s, workspace_id=ws.id, slug="c", name="C")
+        ws_id, company_id = ws.id, company.id
+    run_ids = []
+    for i in range(3):
+        async with tenant_session(app_sessionmaker, ws_id) as s:
+            run, _ = await create_run(
+                s, workspace_id=ws_id, company_id=company_id, directive="d", idempotency_key=f"k{i}"
+            )
+            run_ids.append(run.id)
+
+    assert await _conductor(sessionmaker, app_sessionmaker, _FakeExecutor()).dispatch_once() == 3
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        for run_id in run_ids:
+            run = await get_run(s, run_id)
+            assert run is not None and run.status == RunStatus.SUCCEEDED

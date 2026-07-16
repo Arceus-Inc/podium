@@ -21,7 +21,7 @@ from podium.workspaces import create_workspace
 
 pytestmark = pytest.mark.integration
 
-_CHORUS_ENV = Path("/Users/divyansh/chorus/.env")
+_CHORUS_ENV = Path(os.environ.get("PODIUM_CHORUS_ENV", "/Users/divyansh/chorus/.env"))
 
 
 def _azure_creds() -> tuple[str, str, str] | None:
