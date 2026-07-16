@@ -18,6 +18,7 @@ from podium.events import Broadcaster
 from podium.events.router import router as events_router
 from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
+from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
 from podium.settings import Settings, get_settings
 
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     broadcaster = Broadcaster.from_url(settings.database_url)
     await broadcaster.start()
     app.state.broadcaster = broadcaster
+    app.state.log_store = RunLogStore(settings.log_dir)
 
     conductor_stop: asyncio.Event | None = None
     conductor_task: asyncio.Task[None] | None = None

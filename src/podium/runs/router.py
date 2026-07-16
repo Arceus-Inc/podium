@@ -6,12 +6,13 @@ hides (another tenant's) yields 404 — no run is ever created against a foreign
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies import get_company
 from podium.db import tenant_session
+from podium.logs import RunLogStore
 from podium.runs.schemas import RunCreate, RunOut
 from podium.runs.service import create_run, get_run, request_cancel
 
@@ -22,6 +23,11 @@ def _authorize(actor: Actor, action: str, company_id: str | None = None) -> None
     resource = Resource(kind="run", workspace_id=actor.workspace_id, company_id=company_id)
     if not decide(actor, action, resource):
         raise HTTPException(status_code=403, detail="forbidden")
+
+
+def _get_log_store(request: Request) -> RunLogStore:
+    store: RunLogStore = request.app.state.log_store
+    return store
 
 
 @router.post("/companies/{company_id}/runs", status_code=202, response_model=RunOut)
@@ -74,3 +80,24 @@ async def cancel(
         run = await get_run(session, run_id)
         assert run is not None
         return RunOut.model_validate(run)
+
+
+@router.get("/runs/{run_id}/logs")
+async def logs(
+    run_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    store: RunLogStore = Depends(_get_log_store),
+) -> Response:
+    """Stream a run's durable transcript from the log store. 404 if the run has produced none."""
+    _authorize(actor, "read")
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        run = await get_run(session, run_id)  # RLS hides a foreign run → None → 404
+    if run is None or run.log_ref is None or not store.exists(run_id):
+        raise HTTPException(status_code=404, detail="no logs for this run")
+    size, sha256 = store.digest(run_id)
+    return Response(
+        content=store.read(run_id),
+        media_type="text/plain; charset=utf-8",
+        headers={"X-Log-Sha256": sha256, "Content-Length": str(size)},
+    )

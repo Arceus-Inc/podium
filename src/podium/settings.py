@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     model_base_url: str = ""
     model_deployment: str = ""
     workdir: Path = Path(".podium")
+    log_dir: Path = Path(".podium/logs")  # durable run transcripts (file per run)
     conductor_embedded: bool = False  # dev: run the conductor inside the api lifespan
     conductor_control_database_url: str = ""  # empty → same as database_url
     conductor_lease_seconds: int = 300
