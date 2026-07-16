@@ -1,21 +1,28 @@
-"""The real executor: drive a live `CompanyGraph` (company.build) with the chorus heartbeat.
+"""The real executor: drive a live `CompanyGraph` (company.build) with the chorus heartbeat, and
+mirror its EventBus into the product event log.
 
-This is the only place podium couples to chorus/the model. It holds one graph per company (lazily
-built), submits the directive as a chorus task, and pulses `tick()`+`drain()` until the task reaches
-a terminal status — mapping chorus's outcome onto a podium RunStatus. Cancel is cooperative: checked
-between pulses. All model/LLM work happens here, against the company's own ledger — never the
-product DB — so the conductor holds no product-DB connection while a run executes.
+Per company the host holds one runtime: the graph, a per-company `EventMirror`, and an `EventIngest`
+subscribed to the graph's EventBus. The executor submits the directive, records the chorus root task
+(`engine_task_id` + `register_run`) so events route to the run, then pulses `tick()`+`drain()` until
+the task is terminal. All model/LLM + event work rides the company's own ledger/bus; the product DB
+is touched only for short mirror writes.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from chorus.ledger._models import TaskStatus
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from company import CompanyConfig, CompanyGraph, build
 from podium.conductor._executor import CancelCheck, ExecutionResult
-from podium.runs import RunStatus
+from podium.conductor._ingest import EventIngest
+from podium.conductor._mirror import EventMirror
+from podium.db import tenant_session
+from podium.runs import RunStatus, set_engine_task_id
 
 _TERMINAL: dict[TaskStatus, RunStatus] = {
     TaskStatus.DONE: RunStatus.SUCCEEDED,
@@ -24,35 +31,84 @@ _TERMINAL: dict[TaskStatus, RunStatus] = {
 }
 
 
-class CompanyGraphHost:
-    """One live CompanyGraph per company, built on first use from the model config + a workdir."""
+@dataclass
+class _CompanyRuntime:
+    graph: CompanyGraph
+    assignee: str
+    mirror: EventMirror
+    ingest: EventIngest
 
-    def __init__(self, *, api_key: str, base_url: str, deployment: str, workdir: Path) -> None:
+
+class CompanyGraphHost:
+    """One live runtime per company: graph + event mirror + bus ingest, built on first use."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        deployment: str,
+        workdir: Path,
+        app_sessionmaker: async_sessionmaker[AsyncSession],
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._deployment = deployment
         self._workdir = workdir
-        self._graphs: dict[str, CompanyGraph] = {}
-        self._assignee: dict[str, str] = {}
+        self._app_sm = app_sessionmaker
+        self._runtimes: dict[str, _CompanyRuntime] = {}
 
-    def get(self, company_id: str) -> tuple[CompanyGraph, str]:
-        """Return (graph, assignee_name), building and staffing the company on first request."""
-        if company_id not in self._graphs:
-            graph = build(
-                CompanyConfig(
-                    api_key=self._api_key,
-                    base_url=self._base_url,
-                    deployment=self._deployment,
-                    workdir=self._workdir / company_id,
-                    company_id=company_id,
-                )
+    async def ensure(self, company_id: str, workspace_id: str) -> _CompanyRuntime:
+        existing = self._runtimes.get(company_id)
+        if existing is not None:
+            return existing
+        graph = build(
+            CompanyConfig(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                deployment=self._deployment,
+                workdir=self._workdir / company_id,
+                company_id=company_id,
             )
-            # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
-            # workforce from the company config.
-            worker = graph.org.hire(name="Ace", role="backend_engineer")
-            self._graphs[company_id] = graph
-            self._assignee[company_id] = worker.name
-        return self._graphs[company_id], self._assignee[company_id]
+        )
+        # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
+        # workforce from the company config.
+        worker = graph.org.hire(name="Ace", role="backend_engineer")
+        mirror = EventMirror(self._app_sm, company_id=company_id, workspace_id=workspace_id)
+        await mirror.rehydrate()  # pick up runs already in flight from a prior conductor
+        ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
+        ingest.start()
+        runtime = _CompanyRuntime(graph=graph, assignee=worker.name, mirror=mirror, ingest=ingest)
+        self._runtimes[company_id] = runtime
+        return runtime
+
+    async def attach_run(
+        self, runtime: _CompanyRuntime, *, run_id: str, workspace_id: str, engine_task_id: str
+    ) -> None:
+        """Bind a podium run to its chorus root task — durably (the column) and in the mirror map."""
+        async with tenant_session(self._app_sm, workspace_id) as session:
+            await set_engine_task_id(session, run_id, engine_task_id)
+        runtime.mirror.register_run(run_id=run_id, engine_task_id=engine_task_id)
+
+    async def aclose(self) -> None:
+        for runtime in self._runtimes.values():
+            await runtime.ingest.stop()
+
+
+def _root_resolver(graph: CompanyGraph) -> Any:
+    """Map any chorus task id to its root (the run's engine_task_id) by walking parents in the ledger."""
+    ledger = graph.org._ledger
+
+    def resolve(task_id: str) -> str | None:
+        task = ledger.tasks.get(task_id)
+        while task is not None and task.parent_id is not None:
+            parent = ledger.tasks.get(task.parent_id)
+            if parent is None:
+                break
+            task = parent
+        return task.id if task is not None else None
+
+    return resolve
 
 
 class ChorusRunExecutor:
@@ -61,21 +117,29 @@ class ChorusRunExecutor:
         self._max_ticks = max_ticks
 
     async def execute(
-        self, *, workspace_id: str, company_id: str, directive: str, is_canceled: CancelCheck
+        self,
+        *,
+        run_id: str,
+        workspace_id: str,
+        company_id: str,
+        directive: str,
+        is_canceled: CancelCheck,
     ) -> ExecutionResult:
-        graph, assignee = self._host.get(company_id)
-        task = graph.org.submit(directive, assignee=assignee)
+        runtime = await self._host.ensure(company_id, workspace_id)
+        task = runtime.graph.org.submit(directive, assignee=runtime.assignee)
+        await self._host.attach_run(
+            runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
+        )
         for _ in range(self._max_ticks):
             if await is_canceled():
                 return ExecutionResult(status=RunStatus.CANCELED)
-            await graph.org.tick()
-            await graph.org.drain()
-            current = graph.org._ledger.tasks.get(task.id)  # composition root reaches the ledger
+            await runtime.graph.org.tick()
+            await runtime.graph.org.drain()
+            current = runtime.graph.org._ledger.tasks.get(task.id)
             if current is not None and current.status in _TERMINAL:
                 mapped = _TERMINAL[current.status]
                 error = "task rejected" if mapped is RunStatus.FAILED else None
                 return ExecutionResult(status=mapped, error=error)
-        # ponytail: on timeout the chorus task is left in-progress in its ledger (an orphan). chorus
-        # has no per-task cancel today (only whole-heartbeat stop, which would kill sibling runs);
-        # wire a real interrupt here when chorus exposes one.
+        # ponytail: on timeout the chorus task is left in-progress (an orphan); chorus has no per-task
+        # cancel today (only whole-heartbeat stop, which would kill sibling runs).
         return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")

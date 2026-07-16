@@ -36,7 +36,13 @@ class _FakeExecutor:
         self._honor_cancel = honor_cancel
 
     async def execute(
-        self, *, workspace_id: str, company_id: str, directive: str, is_canceled: CancelCheck
+        self,
+        *,
+        run_id: str,
+        workspace_id: str,
+        company_id: str,
+        directive: str,
+        is_canceled: CancelCheck,
     ) -> ExecutionResult:
         if self._on_execute is not None:
             await self._on_execute()

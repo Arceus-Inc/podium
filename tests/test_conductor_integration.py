@@ -6,6 +6,7 @@ normal gate stays hermetic and free.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from podium.companies import create_company
 from podium.conductor import Conductor
 from podium.conductor._chorus_executor import ChorusRunExecutor, CompanyGraphHost
 from podium.db import tenant_session
+from podium.events import list_run_events
 from podium.runs import TERMINAL_STATUSES, RunStatus, create_run, get_run
 from podium.workspaces import create_workspace
 
@@ -65,7 +67,11 @@ async def test_real_run_reaches_a_terminal_status(
         run_id = run.id
 
     host = CompanyGraphHost(
-        api_key=api_key, base_url=base_url, deployment=deployment, workdir=tmp_path
+        api_key=api_key,
+        base_url=base_url,
+        deployment=deployment,
+        workdir=tmp_path,
+        app_sessionmaker=app_sessionmaker,
     )
     # A real agent building to chorus's DoD takes many slow beats; a modest budget proves the run
     # engages the real model + heartbeat (queued→running→a terminal state). For a full succeed-to-DoD
@@ -77,9 +83,22 @@ async def test_real_run_reaches_a_terminal_status(
         worker_id="integration",
     )
 
-    assert await conductor.dispatch_once() == 1
-    async with tenant_session(app_sessionmaker, ws_id) as s:
-        finished = await get_run(s, run_id)
-    assert finished is not None
-    assert finished.status in TERMINAL_STATUSES  # claimed, executed on a real model, finalized
-    assert finished.status != RunStatus.QUEUED
+    try:
+        assert await conductor.dispatch_once() == 1
+        async with tenant_session(app_sessionmaker, ws_id) as s:
+            finished = await get_run(s, run_id)
+        assert finished is not None
+        assert finished.status in TERMINAL_STATUSES  # claimed, executed on a real model, finalized
+        assert finished.status != RunStatus.QUEUED
+
+        # The live EventBus was mirrored: the run has a queryable event log (let the ingest drain).
+        events: list[object] = []
+        for _ in range(40):
+            async with tenant_session(app_sessionmaker, ws_id) as s:
+                events = await list_run_events(s, run_id, after=0, limit=100)
+            if events:
+                break
+            await asyncio.sleep(0.1)
+        assert events, "expected the run's chorus events to be mirrored into the event log"
+    finally:
+        await host.aclose()

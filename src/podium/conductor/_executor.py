@@ -26,5 +26,11 @@ class ExecutionResult:
 
 class RunExecutor(Protocol):
     async def execute(
-        self, *, workspace_id: str, company_id: str, directive: str, is_canceled: CancelCheck
+        self,
+        *,
+        run_id: str,
+        workspace_id: str,
+        company_id: str,
+        directive: str,
+        is_canceled: CancelCheck,
     ) -> ExecutionResult: ...
