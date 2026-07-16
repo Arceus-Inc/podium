@@ -46,6 +46,20 @@ async def test_mirror_assigns_monotonic_seq_and_routes_by_task(
     assert all(e.run_id == run_id for e in rows)
 
 
+async def test_unicode_payload_is_stored(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    # Real model output is Unicode; the JSONB payload must round-trip (regression: SQL_ASCII cluster).
+    ws_id, company_id, run_id = await _company_with_run(sessionmaker)
+    mirror = EventMirror(app_sessionmaker, company_id=company_id, workspace_id=ws_id)
+    mirror.register_run(run_id=run_id, engine_task_id="t")
+    await mirror.record(type="run.text", payload={"text": "arrow → café 日本語"}, task_id="t")
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        rows = await list_run_events(s, run_id, after=0, limit=10)
+    assert rows[0].payload["text"] == "arrow → café 日本語"
+
+
 async def test_unrouted_event_is_company_level(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
