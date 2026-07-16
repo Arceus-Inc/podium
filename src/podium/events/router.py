@@ -29,8 +29,9 @@ async def list_events(
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
         if await get_run(session, run_id) is None:  # RLS hides another tenant's run → 404
             raise HTTPException(status_code=404, detail="run not found")
-        rows = await list_run_events(session, run_id, after=after, limit=limit)
-        events = [EventOut.model_validate(row) for row in rows]
-    has_next = len(events) == limit
+        # Fetch one extra to know if a next page exists without a false positive on a full-but-final page.
+        rows = await list_run_events(session, run_id, after=after, limit=limit + 1)
+    has_next = len(rows) > limit
+    events = [EventOut.model_validate(row) for row in rows[:limit]]
     next_after = events[-1].seq if events else None
     return EventPage(data=events, meta=EventPageMeta(next_after=next_after, has_next=has_next))

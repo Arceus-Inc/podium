@@ -54,23 +54,27 @@ class EventMirror:
         at: datetime | None = None,
     ) -> Event:
         """Persist one event with the next seq and wake the stream — atomically."""
-        async with self._lock, tenant_session(self._sm, self._workspace_id) as session:
-            seq = self._next_seq
-            if seq is None:
-                seq = await max_company_seq(session, self._company_id) + 1
-            run_id = self._task_to_run.get(task_id) if task_id is not None else None
-            event = await append_event(
-                session,
-                company_id=self._company_id,
-                seq=seq,
-                workspace_id=self._workspace_id,
-                run_id=run_id,
-                type=type,
-                employee_id=employee_id,
-                payload=payload,
-                created_at=at or datetime.now(UTC),
-            )
-            await _notify(session, self._company_id, seq, run_id, type)
+        async with self._lock:
+            async with tenant_session(self._sm, self._workspace_id) as session:
+                seq = self._next_seq
+                if seq is None:
+                    seq = await max_company_seq(session, self._company_id) + 1
+                run_id = self._task_to_run.get(task_id) if task_id is not None else None
+                event = await append_event(
+                    session,
+                    company_id=self._company_id,
+                    seq=seq,
+                    workspace_id=self._workspace_id,
+                    run_id=run_id,
+                    type=type,
+                    employee_id=employee_id,
+                    payload=payload,
+                    created_at=at or datetime.now(UTC),
+                )
+                # A collision here means two mirrors write one company — a violated invariant, not
+                # a retry case: this mirror is meant to be the company's single writer.
+                await _notify(session, self._company_id, seq, run_id, type)
+            # Advance ONLY after the transaction committed — a failed commit reuses this seq (no gap).
             self._next_seq = seq + 1
             return event
 

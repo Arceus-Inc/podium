@@ -20,8 +20,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("runs", sa.Column("engine_task_id", sa.String(), nullable=True))
-
     op.create_table(
         "events",
         sa.Column("company_id", sa.String(), nullable=False),
@@ -57,4 +55,3 @@ def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS events_tenant_isolation ON events")
     op.drop_index("ix_events_run_id_seq", table_name="events")
     op.drop_table("events")
-    op.drop_column("runs", "engine_task_id")

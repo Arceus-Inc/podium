@@ -153,9 +153,10 @@ an N+1 ledger walk per event.
 
 ### 4.5 Payload discipline ("events in PG, blobs out")
 Lifecycle/status events (`run.started`, `task.status`, `run.done`, `run.evaluated`, `agent.status`)
-mirror their payload in full. Chatty text events (`run.text`, `run.tool_result`) store an **excerpt**
-in `payload`; the full text goes to the durable log store (M3c) with a pointer. Keeps the events table
-telemetry-sized, not transcript-sized.
+mirror their payload in full. Chatty text events (`run.text`, `run.tool_result`) should store an
+**excerpt** in `payload`, with the full text in the durable log store + a pointer — but excerpting
+without somewhere to put the full text is data loss, so it **lands with M3c** (the log store), not
+M3a. Until then M3a stores payloads verbatim; volume is bounded by the hermetic scope.
 
 ### 4.6 Endpoints
 ```
@@ -195,10 +196,11 @@ before subscribing, so the tail can't leak across tenants. Optional `?run_id=` f
 | Transport | SSE | one-way only; if the dashboard ever needs client→server on the same channel, revisit WS |
 
 ## 7. Delivery slices (each TDD; gate: ruff+mypy --strict+pytest on real Postgres)
-- **M3a — mirror + cursor paging** *(hermetic)*: `events` table + RLS + `runs.engine_task_id`; the
-  per-company `EventMirror` (route → seq → outbox insert+NOTIFY), fed by synthetic chorus `Event`s in
-  tests (no real model); `GET /v1/runs/{id}/events?after=`. **Exit:** a run yields an ordered,
-  gap-free, cursor-paged event log.
+- **M3a — mirror + cursor paging** *(hermetic)*: `events` table + RLS; the per-company `EventMirror`
+  (route via an in-memory `task_id→run_id` map → seq → outbox insert+NOTIFY), fed by synthetic chorus
+  `Event`s in tests (no real model); `GET /v1/runs/{id}/events?after=`. **Exit:** a run yields an
+  ordered, cursor-paged event log. *(`runs.engine_task_id` — the persisted routing key — lands with
+  M3b, when the conductor actually writes it on submit.)*
 - **M3b — SSE stream + replay/tail**: broadcaster (LISTEN → bounded per-client queues), keepalive,
   `GET /v1/companies/{id}/stream` with `Last-Event-ID` replay-then-tail. **Exit (the plan's):** a
   dashboard-shape client replays a full run across a reconnect — no gaps, no dupes.
