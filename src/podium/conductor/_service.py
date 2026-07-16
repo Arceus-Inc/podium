@@ -71,6 +71,9 @@ class Conductor:
         results = await asyncio.gather(
             *(claim_and_run(ref) for ref in refs), return_exceptions=True
         )
+        for ref, result in zip(refs, results, strict=True):
+            if isinstance(result, Exception):  # a claim/finalize error must not vanish silently
+                _log.error("run_dispatch_failed", run_id=ref.id, error=repr(result))
         return sum(1 for result in results if result is True)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
@@ -109,7 +112,9 @@ class Conductor:
             result = ExecutionResult(status=RunStatus.FAILED, error=repr(exc))
         finally:
             keep_alive.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            # The keep-alive should never die on its own, but even if it did its exception must not
+            # block finalize — losing a completed result is worse than a stale lease.
+            with contextlib.suppress(BaseException):
                 await keep_alive
 
         async with tenant_session(self._app_sm, ref.workspace_id) as session:
@@ -120,10 +125,14 @@ class Conductor:
     async def _renew_lease_loop(self, ref: RunRef) -> None:
         while True:
             await asyncio.sleep(self._renew_interval)
-            async with tenant_session(self._app_sm, ref.workspace_id) as session:
-                await renew_lease(
-                    session, ref.id, owner=self._worker_id, lease_seconds=self._lease_seconds
-                )
+            # A transient DB blip must not kill the keep-alive; just try again next tick.
+            try:
+                async with tenant_session(self._app_sm, ref.workspace_id) as session:
+                    await renew_lease(
+                        session, ref.id, owner=self._worker_id, lease_seconds=self._lease_seconds
+                    )
+            except Exception:
+                _log.warning("run_lease_renew_failed", run_id=ref.id)
 
     async def _reclaim_expired(self) -> None:
         async with self._control_sm() as session:

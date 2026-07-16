@@ -164,10 +164,11 @@ async def test_second_dispatch_finds_no_work(
     assert await conductor.dispatch_once() == 0  # nothing left queued
 
 
-async def test_dispatches_a_batch_concurrently(
+async def test_dispatches_a_whole_batch(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
+    # Verifies batch completion (every queued run finalized), not wall-clock parallelism.
     async with sessionmaker() as s, s.begin():
         ws = await create_workspace(s, name="A", slug="a")
         company = await create_company(s, workspace_id=ws.id, slug="c", name="C")

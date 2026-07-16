@@ -20,8 +20,12 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
     """Return (conductor, aclose). `aclose` disposes both engines on shutdown."""
     control_url = settings.conductor_control_database_url or settings.database_url
     control_engine = make_engine(control_url, pool_size=2, max_overflow=2)
+    # max_concurrent (= batch_size) runs each hold up to ~2 short-lived connections at peak
+    # (keep-alive renew + a status/finalize query), so give the app pool 2x headroom.
     app_engine = make_engine(
-        settings.database_url, pool_size=settings.conductor_batch_size, max_overflow=2
+        settings.database_url,
+        pool_size=settings.conductor_batch_size,
+        max_overflow=settings.conductor_batch_size,
     )
     host = CompanyGraphHost(
         api_key=settings.model_api_key,
