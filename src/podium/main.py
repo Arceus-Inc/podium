@@ -14,6 +14,7 @@ from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
 from podium.db import make_engine, make_sessionmaker
+from podium.events.router import router as events_router
 from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
 from podium.runs.router import router as runs_router
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
 
     app.include_router(companies_router)
     app.include_router(runs_router)
+    app.include_router(events_router)
     return app
 
 

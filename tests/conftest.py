@@ -106,6 +106,6 @@ async def _clean(database_url: str) -> AsyncIterator[None]:
     engine = make_engine(database_url)
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE workspaces, companies, api_keys, users, runs, commands CASCADE")
+            text("TRUNCATE workspaces, companies, api_keys, users, runs, commands, events CASCADE")
         )
     await engine.dispose()
