@@ -5,10 +5,10 @@ Callers pass a `tenant_session`; RLS scopes every statement to the run's workspa
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -23,14 +23,10 @@ _CONDUCTOR_CHANNEL = "podium_conductor"
 class RunRef:
     """A queued run's identity — enough for the conductor to claim and dispatch it."""
 
-    id: str
-    workspace_id: str
-    company_id: str
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    company_id: uuid.UUID
     directive: str
-
-
-def _mint_id() -> str:
-    return f"run_{uuid4().hex}"
 
 
 def _now() -> datetime:
@@ -40,17 +36,19 @@ def _now() -> datetime:
 async def create_run(
     session: AsyncSession,
     *,
-    workspace_id: str,
-    company_id: str,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
     directive: str,
     idempotency_key: str,
 ) -> tuple[Run, bool]:
-    """Insert a queued run, or return the existing one for a repeated key. Returns (run, created)."""
+    """Insert a queued run, or return the existing one for a repeated key. Returns (run, created).
+
+    The id is DB-minted (uuidv7 server default) and comes back through RETURNING.
+    """
     now = _now()
     stmt = (
         pg_insert(Run)
         .values(
-            id=_mint_id(),
             workspace_id=workspace_id,
             company_id=company_id,
             directive=directive,
@@ -76,24 +74,24 @@ async def create_run(
     # Wake the conductor in the same transaction that created the work.
     await session.execute(
         text("SELECT pg_notify(:channel, :payload)"),
-        {"channel": _CONDUCTOR_CHANNEL, "payload": company_id},
+        {"channel": _CONDUCTOR_CHANNEL, "payload": str(company_id)},
     )
     run = await session.get(Run, inserted_id)
     assert run is not None
     return run, True
 
 
-async def get_run(session: AsyncSession, run_id: str) -> Run | None:
+async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
     return await session.get(Run, run_id)
 
 
-async def list_runs(session: AsyncSession, company_id: str) -> Sequence[Run]:
+async def list_runs(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Run]:
     stmt = select(Run).where(Run.company_id == company_id).order_by(Run.created_at.desc())
     return (await session.execute(stmt)).scalars().all()
 
 
 async def claim_queued_run(
-    session: AsyncSession, run_id: str, *, owner: str, lease_seconds: int
+    session: AsyncSession, run_id: uuid.UUID, *, owner: str, lease_seconds: int
 ) -> bool:
     """Atomically move queued→running and take the lease. False = already owned (a real 409)."""
     stmt = (
@@ -111,7 +109,12 @@ async def claim_queued_run(
 
 
 async def finalize_run(
-    session: AsyncSession, run_id: str, *, owner: str, status: RunStatus, error: str | None = None
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    owner: str,
+    status: RunStatus,
+    error: str | None = None,
 ) -> bool:
     """Move a running/canceling run to a terminal status and clear the lock — owner must match."""
     stmt = (
@@ -128,7 +131,7 @@ async def finalize_run(
 
 
 async def renew_lease(
-    session: AsyncSession, run_id: str, *, owner: str, lease_seconds: int
+    session: AsyncSession, run_id: uuid.UUID, *, owner: str, lease_seconds: int
 ) -> bool:
     """Extend the lease on a run this worker still owns and is still running. False if it lost it."""
     stmt = (
@@ -140,7 +143,7 @@ async def renew_lease(
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
-async def request_cancel(session: AsyncSession, run_id: str) -> bool:
+async def request_cancel(session: AsyncSession, run_id: uuid.UUID) -> bool:
     """Move a queued/running run to `canceling`. False if it is already terminal (or canceling)."""
     stmt = (
         update(Run)
@@ -166,7 +169,7 @@ async def queued_run_refs(session: AsyncSession, *, limit: int) -> list[RunRef]:
     return [RunRef(id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3]) for r in rows]
 
 
-async def expired_lease_refs(session: AsyncSession) -> list[tuple[str, str]]:
+async def expired_lease_refs(session: AsyncSession) -> list[tuple[uuid.UUID, uuid.UUID]]:
     """(run_id, workspace_id) of running runs whose lease has lapsed — a crashed owner to reclaim."""
     stmt = select(Run.id, Run.workspace_id).where(
         Run.status == RunStatus.RUNNING, Run.lease_expires_at < _now()
@@ -174,7 +177,7 @@ async def expired_lease_refs(session: AsyncSession) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in (await session.execute(stmt)).all()]
 
 
-async def set_log_ref(session: AsyncSession, run_id: str, log_ref: str) -> bool:
+async def set_log_ref(session: AsyncSession, run_id: uuid.UUID, log_ref: str) -> bool:
     """Point a run at its durable log file — guarded so it's set exactly once (idempotent on retry)."""
     stmt = (
         update(Run)
@@ -185,7 +188,7 @@ async def set_log_ref(session: AsyncSession, run_id: str, log_ref: str) -> bool:
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
-async def set_engine_task_id(session: AsyncSession, run_id: str, engine_task_id: str) -> bool:
+async def set_engine_task_id(session: AsyncSession, run_id: uuid.UUID, engine_task_id: str) -> bool:
     """Record the chorus root task for a run (written on submit). RLS scopes it to the tenant."""
     stmt = (
         update(Run)
@@ -196,7 +199,9 @@ async def set_engine_task_id(session: AsyncSession, run_id: str, engine_task_id:
     return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
-async def active_engine_tasks(session: AsyncSession, company_id: str) -> list[tuple[str, str]]:
+async def active_engine_tasks(
+    session: AsyncSession, company_id: uuid.UUID
+) -> list[tuple[uuid.UUID, str]]:
     """(run_id, engine_task_id) for a company's non-terminal runs — the mirror's rehydration source."""
     stmt = select(Run.id, Run.engine_task_id).where(
         Run.company_id == company_id,
@@ -206,7 +211,7 @@ async def active_engine_tasks(session: AsyncSession, company_id: str) -> list[tu
     return [(r[0], r[1]) for r in (await session.execute(stmt)).all()]
 
 
-async def reclaim_run(session: AsyncSession, run_id: str) -> bool:
+async def reclaim_run(session: AsyncSession, run_id: uuid.UUID) -> bool:
     """Return an expired-lease run to `queued` (crash recovery). Guarded so a live owner is untouched."""
     stmt = (
         update(Run)

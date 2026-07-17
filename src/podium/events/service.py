@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from podium.events.models import Event
 
 
-async def max_company_seq(session: AsyncSession, company_id: str) -> int:
+async def max_company_seq(session: AsyncSession, company_id: uuid.UUID) -> int:
     """The highest seq written for a company (0 if none) — used to seed the mirror's counter."""
     stmt = select(func.coalesce(func.max(Event.seq), 0)).where(Event.company_id == company_id)
     return int((await session.execute(stmt)).scalar_one())
@@ -21,10 +22,10 @@ async def max_company_seq(session: AsyncSession, company_id: str) -> int:
 async def append_event(
     session: AsyncSession,
     *,
-    company_id: str,
+    company_id: uuid.UUID,
     seq: int,
-    workspace_id: str,
-    run_id: str | None,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID | None,
     type: str,
     employee_id: str | None,
     payload: dict[str, Any],
@@ -46,7 +47,7 @@ async def append_event(
 
 
 async def list_run_events(
-    session: AsyncSession, run_id: str, *, after: int, limit: int
+    session: AsyncSession, run_id: uuid.UUID, *, after: int, limit: int
 ) -> Sequence[Event]:
     """A run's events with seq > `after`, ordered, capped at `limit`. RLS scopes to the tenant."""
     stmt = (
@@ -59,7 +60,7 @@ async def list_run_events(
 
 
 async def list_company_events(
-    session: AsyncSession, company_id: str, *, after: int, limit: int
+    session: AsyncSession, company_id: uuid.UUID, *, after: int, limit: int
 ) -> Sequence[Event]:
     """A company's events with seq > `after`, ordered — the SSE replay/tail read. RLS scopes it."""
     stmt = (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 import httpx
 import pytest_asyncio
@@ -50,7 +51,7 @@ async def test_not_found_uses_error_envelope(
 ) -> None:
     ws_id, token = await _ws_key(sessionmaker)
     resp = await api.get(
-        f"/v1/workspaces/{ws_id}/companies/cmp_missing",
+        f"/v1/workspaces/{ws_id}/companies/{uuid4()}",  # well-formed but absent -> 404
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 404

@@ -1,4 +1,4 @@
-"""events table (per-company seq, RLS) + runs.engine_task_id
+"""events table (per-company seq, RLS)
 
 Revision ID: 0006_events
 Revises: 0005_runs_commands
@@ -18,15 +18,18 @@ down_revision: str | None = "0005_runs_commands"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+_WORKSPACE_GUC_UUID = "(NULLIF(current_setting('app.workspace_id', true), ''))::uuid"
+
 
 def upgrade() -> None:
     op.create_table(
         "events",
-        sa.Column("company_id", sa.String(), nullable=False),
+        sa.Column("company_id", postgresql.UUID(), nullable=False),
         sa.Column("seq", sa.BigInteger(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
-        sa.Column("run_id", sa.String(), nullable=True),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
+        sa.Column("run_id", postgresql.UUID(), nullable=True),
         sa.Column("type", sa.String(), nullable=False),
+        # employee_id is a chorus-minted id (engine context) — text until the M5.2 engine port.
         sa.Column("employee_id", sa.String(), nullable=True),
         sa.Column("payload", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -46,8 +49,8 @@ def upgrade() -> None:
     op.execute("ALTER TABLE events FORCE ROW LEVEL SECURITY")
     op.execute(
         "CREATE POLICY events_tenant_isolation ON events "
-        "USING (workspace_id = current_setting('app.workspace_id', true)) "
-        "WITH CHECK (workspace_id = current_setting('app.workspace_id', true))"
+        f"USING (workspace_id = {_WORKSPACE_GUC_UUID}) "
+        f"WITH CHECK (workspace_id = {_WORKSPACE_GUC_UUID})"
     )
 
 

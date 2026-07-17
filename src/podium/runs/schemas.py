@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -16,9 +17,9 @@ class RunCreate(BaseModel):
 class RunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
-    workspace_id: str
-    company_id: str
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    company_id: uuid.UUID
     directive: str
     idempotency_key: str
     status: str

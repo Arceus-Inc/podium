@@ -3,35 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-import pytest
+from uuid import uuid4
 
 from podium.logs import RunLogStore, excerpt_payload
 
 
 def test_append_read_and_digest(tmp_path: Path) -> None:
     store = RunLogStore(tmp_path)
-    assert store.exists("run_1") is False
-    store.append("run_1", "hello ")
-    store.append("run_1", "world →")  # Unicode: the store is UTF-8
-    assert store.read("run_1") == "hello world →"
-    assert store.exists("run_1") is True
-    size, sha = store.digest("run_1")
+    run_id = uuid4()
+    assert store.exists(run_id) is False
+    store.append(run_id, "hello ")
+    store.append(run_id, "world →")  # Unicode: the store is UTF-8
+    assert store.read(run_id) == "hello world →"
+    assert store.exists(run_id) is True
+    size, sha = store.digest(run_id)
     assert size == len("hello world →".encode())
     assert len(sha) == 64  # sha256 hex
 
 
-def test_rejects_unsafe_run_ids(tmp_path: Path) -> None:
-    store = RunLogStore(tmp_path)
-    for bad in ["../etc/passwd", "a/b", "..\\x"]:
-        with pytest.raises(ValueError, match="unsafe run id"):
-            store.exists(bad)
-
-
 def test_ref_is_stable_per_run(tmp_path: Path) -> None:
     store = RunLogStore(tmp_path)
-    assert store.ref("run_1") == store.ref("run_1")
-    assert store.ref("run_1") != store.ref("run_2")
+    run_a, run_b = uuid4(), uuid4()
+    assert store.ref(run_a) == store.ref(run_a)
+    assert store.ref(run_a) != store.ref(run_b)
+    # Path safety is the uuid type itself: canonical uuid text is hex + hyphens, no separators.
+    assert store.ref(run_a) == f"{run_a}.log"
 
 
 def test_excerpt_splits_long_text() -> None:

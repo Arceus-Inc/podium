@@ -8,6 +8,7 @@ replay→tail seam and nothing is duplicated (seq is per-company monotonic + sin
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 
 from fastapi import HTTPException, Request
@@ -46,7 +47,10 @@ def _frame(event: Event) -> str:
 
 
 async def _events_after(
-    company_id: str, workspace_id: str, after: int, sessionmaker: async_sessionmaker[AsyncSession]
+    company_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    after: int,
+    sessionmaker: async_sessionmaker[AsyncSession],
 ) -> AsyncIterator[Event]:
     """Every event past `after`, chunked so a huge run never buffers wholesale. RLS scopes it."""
     cursor = after
@@ -63,8 +67,8 @@ async def _events_after(
 async def event_stream(
     request: Request,
     *,
-    company_id: str,
-    workspace_id: str,
+    company_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     cursor: int,
     sessionmaker: async_sessionmaker[AsyncSession],
     broadcaster: Broadcaster,

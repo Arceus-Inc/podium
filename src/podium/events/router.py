@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,7 +29,7 @@ def _get_broadcaster(request: Request) -> Broadcaster:
 
 @router.get("/runs/{run_id}/events", response_model=EventPage)
 async def list_events(
-    run_id: str,
+    run_id: uuid.UUID,
     after: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=_MAX_LIMIT),
     actor: Actor = Depends(enforce_rate_limit),
@@ -48,7 +50,7 @@ async def list_events(
 
 @router.get("/companies/{company_id}/stream")
 async def stream(
-    company_id: str,
+    company_id: uuid.UUID,
     request: Request,
     after: int = Query(0, ge=0),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),

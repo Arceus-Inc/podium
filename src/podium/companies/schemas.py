@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -17,8 +18,8 @@ class CompanyCreate(BaseModel):
 class CompanyOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
-    workspace_id: str
+    id: uuid.UUID
+    workspace_id: uuid.UUID
     slug: str
     name: str
     state: str

@@ -5,9 +5,11 @@ Only the hash is stored; the raw token is shown once at creation.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from podium.db import Base
@@ -20,10 +22,16 @@ def _now() -> datetime:
 class ApiKey(Base):
     __tablename__ = "api_keys"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)  # ak_<uuid4hex>
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"))
-    company_id: Mapped[str | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id"))
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     key_hash: Mapped[str] = mapped_column(String, unique=True)  # sha256 hex of the raw token
     prefix: Mapped[str] = mapped_column(String)  # first chars, for display only
     name: Mapped[str] = mapped_column(String)

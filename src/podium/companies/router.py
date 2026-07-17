@@ -6,6 +6,8 @@ path — so RLS scopes to the caller's tenant even if a path check were ever wro
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,7 +19,9 @@ from podium.db import tenant_session
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/companies", tags=["companies"])
 
 
-def _authorize(actor: Actor, action: str, workspace_id: str, company_id: str | None = None) -> None:
+def _authorize(
+    actor: Actor, action: str, workspace_id: uuid.UUID, company_id: uuid.UUID | None = None
+) -> None:
     resource = Resource(kind="company", workspace_id=workspace_id, company_id=company_id)
     if not decide(actor, action, resource):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -25,7 +29,7 @@ def _authorize(actor: Actor, action: str, workspace_id: str, company_id: str | N
 
 @router.post("", status_code=201, response_model=CompanyOut)
 async def create(
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     body: CompanyCreate,
     response: Response,
     actor: Actor = Depends(enforce_rate_limit),
@@ -46,7 +50,7 @@ async def create(
 
 @router.get("", response_model=list[CompanyOut])
 async def list_(
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> list[CompanyOut]:
@@ -58,8 +62,8 @@ async def list_(
 
 @router.get("/{company_id}", response_model=CompanyOut)
 async def get(
-    workspace_id: str,
-    company_id: str,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> CompanyOut:

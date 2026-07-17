@@ -29,14 +29,18 @@ DO $$ BEGIN
 END $$;
 """
 
+# The GUC is text; the policy casts it to uuid so the comparison is uuid = uuid (index-usable,
+# DB-validated). Unset GUC → NULL → NULL::uuid → predicate NULL → zero rows (fail closed).
+_WORKSPACE_GUC_UUID = "(NULLIF(current_setting('app.workspace_id', true), ''))::uuid"
+
 
 def upgrade() -> None:
     op.execute(_CREATE_ROLE)
 
     op.create_table(
         "companies",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
+        sa.Column("id", postgresql.UUID(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
         sa.Column("slug", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("state", sa.String(), nullable=False),
@@ -62,7 +66,7 @@ def upgrade() -> None:
     op.execute("ALTER TABLE workspaces FORCE ROW LEVEL SECURITY")
     op.execute(
         "CREATE POLICY workspaces_tenant_isolation ON workspaces "
-        "USING (id = current_setting('app.workspace_id', true))"
+        f"USING (id = {_WORKSPACE_GUC_UUID})"
     )
 
     # companies: read and write are both scoped to the session's workspace (WITH CHECK blocks
@@ -71,8 +75,8 @@ def upgrade() -> None:
     op.execute("ALTER TABLE companies FORCE ROW LEVEL SECURITY")
     op.execute(
         "CREATE POLICY companies_tenant_isolation ON companies "
-        "USING (workspace_id = current_setting('app.workspace_id', true)) "
-        "WITH CHECK (workspace_id = current_setting('app.workspace_id', true))"
+        f"USING (workspace_id = {_WORKSPACE_GUC_UUID}) "
+        f"WITH CHECK (workspace_id = {_WORKSPACE_GUC_UUID})"
     )
 
 

@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,21 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from podium.companies.models import Company
 
 
-def _mint_id() -> str:
-    return f"cmp_{uuid4().hex}"
-
-
 async def create_company(
     session: AsyncSession,
     *,
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     slug: str,
     name: str,
     config: dict[str, Any] | None = None,
     ledger_backend: str = "sqlite",
 ) -> Company:
     company = Company(
-        id=_mint_id(),
         workspace_id=workspace_id,
         slug=slug,
         name=name,
@@ -46,6 +41,6 @@ async def list_companies(session: AsyncSession) -> Sequence[Company]:
     return (await session.execute(select(Company))).scalars().all()
 
 
-async def get_company(session: AsyncSession, company_id: str) -> Company | None:
+async def get_company(session: AsyncSession, company_id: uuid.UUID) -> Company | None:
     """Fetch by id within the tenant session. RLS returns None for another tenant's id."""
     return await session.get(Company, company_id)

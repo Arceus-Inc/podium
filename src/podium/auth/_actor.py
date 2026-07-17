@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,17 +12,17 @@ from podium.auth._apikey import resolve_api_key
 
 @dataclass(frozen=True)
 class Actor:
-    workspace_id: str
-    company_id: str | None  # None = workspace-wide key; set = scoped to one company
+    workspace_id: uuid.UUID
+    company_id: uuid.UUID | None  # None = workspace-wide key; set = scoped to one company
     actor_type: str  # "service" in M1b-1; "user" arrives with the users table
-    actor_id: str
+    actor_id: uuid.UUID  # the user id (user keys) or the api-key id (service keys)
 
 
 @dataclass(frozen=True)
 class Resource:
     kind: str  # "company" | "workspace"
-    workspace_id: str
-    company_id: str | None = None
+    workspace_id: uuid.UUID
+    company_id: uuid.UUID | None = None
 
 
 async def resolve_actor(session: AsyncSession, token: str | None) -> Actor | None:

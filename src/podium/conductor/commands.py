@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,10 +15,6 @@ from podium.conductor.models import Command
 _CONDUCTOR_CHANNEL = "podium_conductor"
 
 
-def _mint_id() -> str:
-    return f"cmd_{uuid4().hex}"
-
-
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -26,14 +22,13 @@ def _now() -> datetime:
 async def enqueue_command(
     session: AsyncSession,
     *,
-    workspace_id: str,
-    company_id: str,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
     type: str,
-    run_id: str | None = None,
+    run_id: uuid.UUID | None = None,
     payload: dict[str, Any] | None = None,
 ) -> Command:
     command = Command(
-        id=_mint_id(),
         workspace_id=workspace_id,
         company_id=company_id,
         run_id=run_id,
@@ -41,15 +36,15 @@ async def enqueue_command(
         payload=payload or {},
     )
     session.add(command)
-    await session.flush()
+    await session.flush()  # DB mints the uuidv7 id; RETURNING fills it
     await session.execute(
         text("SELECT pg_notify(:channel, :payload)"),
-        {"channel": _CONDUCTOR_CHANNEL, "payload": company_id},
+        {"channel": _CONDUCTOR_CHANNEL, "payload": str(company_id)},
     )
     return command
 
 
-async def pending_commands(session: AsyncSession, company_id: str) -> Sequence[Command]:
+async def pending_commands(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Command]:
     """Unconsumed commands for a company, oldest first (the conductor drains these in M2b)."""
     stmt = (
         select(Command)
@@ -59,7 +54,7 @@ async def pending_commands(session: AsyncSession, company_id: str) -> Sequence[C
     return (await session.execute(stmt)).scalars().all()
 
 
-async def mark_consumed(session: AsyncSession, command_id: str) -> bool:
+async def mark_consumed(session: AsyncSession, command_id: uuid.UUID) -> bool:
     """Claim a command. False if it was already consumed — the guard makes consumption idempotent."""
     stmt = (
         update(Command)

@@ -7,12 +7,13 @@ crashed owner's expired lease is reclaimable (crash recovery, not a retry loop).
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from podium.db import Base
@@ -41,12 +42,15 @@ def _now() -> datetime:
 class Run(Base):
     __tablename__ = "runs"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)  # run_<uuid4hex>
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"))
-    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"))
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     directive: Mapped[str] = mapped_column(String)
     idempotency_key: Mapped[str] = mapped_column(String)
-    engine_task_id: Mapped[str | None] = mapped_column(String, nullable=True)  # chorus root task
+    # Chorus-minted root-task id — engine context, text until the M5.2 engine port.
+    engine_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default=RunStatus.QUEUED)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     counts: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)

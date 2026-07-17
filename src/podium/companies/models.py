@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from podium.db import Base
@@ -19,8 +20,12 @@ def _now() -> datetime:
 class Company(Base):
     __tablename__ = "companies"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)  # cmp_<uuid4hex>, minted in service
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"))  # tenant scope
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id")
+    )  # tenant scope
     slug: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)
     state: Mapped[str] = mapped_column(
