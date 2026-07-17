@@ -89,14 +89,26 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     async def readyz(response: Response) -> dict[str, str]:
-        # Readiness must actually touch the DB — a probe that lies is worse than none.
+        # Readiness must actually touch the DB — a probe that lies is worse than none — and
+        # prove every shipped engine delta is applied (a skipped migrate step reads not-ready).
+        from chorus.ledger import load_migrations
+
         try:
             async with app.state.sessionmaker() as session:
-                await session.execute(text("SELECT 1"))
+                applied = {
+                    row[0]
+                    for row in await session.execute(
+                        text("SELECT id FROM chorus_schema_migrations")
+                    )
+                }
         except Exception:
             response.status_code = 503
             return {"status": "unavailable"}
-        return {"status": "ready"}
+        pending = sorted(m.id for m in load_migrations() if m.id not in applied)
+        if pending:
+            response.status_code = 503
+            return {"status": "unavailable", "engine_deltas": f"pending: {', '.join(pending)}"}
+        return {"status": "ready", "engine_deltas": "applied"}
 
     app.include_router(companies_router)
     app.include_router(runs_router)
