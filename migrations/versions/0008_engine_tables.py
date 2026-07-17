@@ -6,6 +6,12 @@ statements (uuid ids, timestamptz, jsonb, boolean, company_id + FORCE RLS by `ap
 podium's job here is orchestration: apply it as the schema owner, record the baseline so
 `PostgresLedger.open` probes and skips DDL, and grant the runtime role exactly the engine tables.
 
+Future engine schema changes ship as immutable deltas in `chorus.ledger.load_migrations()`
+(applied-set model over this baseline). Each one lands here as its own alembic revision that,
+as the schema owner: executes `migration.statements()`, records (id, checksum, now()) in
+chorus_schema_migrations, and grants podium_app any new tables. `Ledger.open` then sees the
+row and skips — the runtime role never needs DDL.
+
 Revision ID: 0008_engine_tables
 Revises: 0007_runs_engine_task_id
 Create Date: 2026-07-17
