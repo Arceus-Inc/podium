@@ -11,6 +11,7 @@ from fastapi import FastAPI, Response
 from sqlalchemy import text
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
+from cockpit.router import router as cockpit_router
 from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await broadcaster.start()
     app.state.broadcaster = broadcaster
     app.state.log_store = RunLogStore(settings.log_dir)
+    app.state.cockpit_workdir = settings.workdir  # semantic/episodic stores live per company here
     app.state.control_provider = ControlPlaneProvider(
         engine_dsn=settings.resolved_engine_ledger_dsn()
     )
@@ -122,6 +124,7 @@ def create_app() -> FastAPI:
     app.include_router(control_router)
     app.include_router(dashboard_router)
     app.include_router(dev_router)
+    app.include_router(cockpit_router)
     return app
 
 
