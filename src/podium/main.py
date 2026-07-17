@@ -12,12 +12,12 @@ from sqlalchemy import text
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from cockpit.router import router as cockpit_router
+from cockpit.router import shell_router as cockpit_shell_router
 from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
 from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
-from podium.dashboard import router as dashboard_router
 from podium.db import make_engine, make_sessionmaker
 from podium.dev import router as dev_router
 from podium.events import Broadcaster
@@ -122,7 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(events_router)
     app.include_router(control_router)
-    app.include_router(dashboard_router)
+    app.include_router(cockpit_shell_router)
     app.include_router(dev_router)
     app.include_router(cockpit_router)
     return app

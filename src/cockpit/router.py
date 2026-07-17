@@ -8,10 +8,12 @@ and read-only detail; control never enters through the cockpit.
 from __future__ import annotations
 
 import uuid
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -56,6 +58,41 @@ async def snapshot(
     return await run_in_threadpool(_read)
 
 
+# The shell — a zero-build static SPA served from package data. The shell itself is
+# unauthenticated (it contains no data); every API and SSE call it makes carries the
+# operator's JWT.
+shell_router = APIRouter(tags=["cockpit-shell"])
+
+_STATIC = files("cockpit") / "static"
+_CONTENT_TYPES = {
+    "index.html": "text/html; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+    "style.css": "text/css; charset=utf-8",
+}
+
+
+def _serve(name: str) -> Response:
+    return Response(
+        content=(_STATIC / name).read_text(encoding="utf-8"),
+        media_type=_CONTENT_TYPES[name],
+    )
+
+
+@shell_router.get("/dashboard", include_in_schema=False)
+async def shell() -> Response:
+    return _serve("index.html")
+
+
+@shell_router.get("/dashboard/app.js", include_in_schema=False)
+async def shell_js() -> Response:
+    return _serve("app.js")
+
+
+@shell_router.get("/dashboard/style.css", include_in_schema=False)
+async def shell_css() -> Response:
+    return _serve("style.css")
+
+
 @router.get("/semantic/{employee_id}")
 async def semantic_detail(
     workspace_id: uuid.UUID,
@@ -70,4 +107,4 @@ async def semantic_detail(
     return await run_in_threadpool(semantic_facts, workdir, company_id, employee_id)
 
 
-__all__ = ["router"]
+__all__ = ["router", "shell_router"]

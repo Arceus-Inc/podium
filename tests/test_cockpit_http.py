@@ -127,7 +127,5 @@ async def test_snapshot_requires_auth(
         ws = await create_workspace(s, name="CX", slug="cx")
         company = await create_company(s, workspace_id=ws.id, slug="cx", name="CX")
         ws_id, company_id = ws.id, company.id
-    response = await api.get(
-        f"/v1/workspaces/{ws_id}/companies/{company_id}/cockpit/snapshot"
-    )
+    response = await api.get(f"/v1/workspaces/{ws_id}/companies/{company_id}/cockpit/snapshot")
     assert response.status_code == 401
