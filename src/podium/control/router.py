@@ -21,6 +21,7 @@ from podium.companies.service import get_company
 from podium.control._allocation import AllocationBoard
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
+from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
 from podium.control._observe import (
     ArtifactSummary,
     CompanyStatus,
@@ -419,4 +420,99 @@ async def export_workforce(
         workspace_id=workspace_id,
         company_id=company_id,
         read=lambda plane: plane.workforce.export_bundle(),
+    )
+
+
+# -- the human boundary (CO2): CEO proposals decided by a person, never a model ---------------
+
+
+@router.get("/plans", response_model=list[PlanView])
+async def workforce_plans(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[PlanView]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.governance.plans(),
+    )
+
+
+async def _decide_plan(
+    *,
+    approve: bool,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+) -> PlanView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    decided_by = str(
+        actor.user_id or actor.actor_id
+    )  # the authenticated human/key, never client-supplied
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: (
+                plane.governance.approve(plan_id, by=decided_by)
+                if approve
+                else plane.governance.reject(plan_id, by=decided_by)
+            ),
+        )
+    except UnknownPlanError as exc:
+        raise HTTPException(status_code=404, detail="plan not found") from exc
+    except PlanConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OrgInvariantViolation as exc:  # a stale plan the org has since outgrown
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/plans/{plan_id}/approve", response_model=PlanView)
+async def approve_plan(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> PlanView:
+    """Atomically materialize the CEO's proposal — employees, grants, budgets, audit trail."""
+    return await _decide_plan(
+        approve=True,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        plan_id=plan_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+    )
+
+
+@router.post("/plans/{plan_id}/reject", response_model=PlanView)
+async def reject_plan(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> PlanView:
+    """Decline without touching the workforce; the CEO may propose a fresh revision."""
+    return await _decide_plan(
+        approve=False,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        plan_id=plan_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
     )

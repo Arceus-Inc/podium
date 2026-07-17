@@ -82,13 +82,13 @@ async function refreshSnapshot() {
   set("n-goals", c.horizon.goals);
   set("n-org", c.chorus.employees);
   set("n-work", c.chorus.open_tasks);
-  set("n-teams", c.delegation.teams);
+  set("n-teams", c.delegation.pending_plans ? `${c.delegation.pending_plans}!` : c.delegation.teams);
   set("n-episodic", c.episodic.records);
   set("n-semantic", c.semantic.atoms);
   set("n-skills", c.skills.heads);
   set("n-llmops", c.llmops.spend_cents ? `${(c.llmops.spend_cents / 100).toFixed(2)}` : "");
   set("n-ops", state.feeds.stalled.length || "");
-  if (location.hash.slice(1) in VIEWS) render(); // live counts inside the open view too
+  if ((location.hash.slice(1) || "overview") === "overview") render(); // refresh map counts; other views keep their form state
 }
 
 /* ================= lanes ================= */
@@ -170,7 +170,11 @@ $("run-form").addEventListener("submit", async (e) => {
   const response = await fetch(`/v1/companies/${state.ctx.companyId}/runs`, {
     method: "POST",
     headers: { Authorization: `Bearer ${state.ctx.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ directive, idempotency_key: crypto.randomUUID() }),
+    body: JSON.stringify({
+      directive,
+      idempotency_key: crypto.randomUUID(),
+      execution_mode: $("formation-mode").checked ? "formation" : "delivery",
+    }),
   });
   const run = await response.json().catch(() => ({}));
   state.runLog = [{ id: run.id, directive, status: run.status ?? `error ${response.status}` }, ...state.runLog].slice(0, 12);
@@ -251,8 +255,19 @@ async function renderWork() {
 }
 
 async function renderDelegation() {
-  const teams = await api("/teams");
-  return card("The delegation flow (read-only — the kernel is internal)", delegationSVG(teams.length)) +
+  const [teams, plans] = await Promise.all([api("/teams"), api("/plans")]);
+  const pending = plans.filter((p) => p.status === "proposed");
+  const planCard = (p) => card(`Pending workforce plan · rev ${p.revision} · by ${esc(p.proposed_by)}`,
+    `<p>${esc(p.rationale)} <span class="pill">confidence ${p.confidence}</span></p>` +
+    `<table class="t"><tr><th>ref</th><th>name</th><th>profession</th><th>reports to</th><th>budget ¢</th></tr>` +
+    p.employees.map((e) => `<tr><td>${esc(e.ref)}</td><td>${esc(e.name)}</td><td>${esc(e.profession)}</td><td>${esc(e.reports_to)}</td><td>${e.budget_cents ?? "—"}</td></tr>`).join("") + `</table>` +
+    `<form class="decide-form" data-plan="${esc(p.id)}" style="margin-top:10px">` +
+    `<button data-decision="approve">Approve — materialize the org</button>` +
+    `<button data-decision="reject" style="background:var(--bad);color:#fff">Reject</button></form>`);
+  const decided = plans.filter((p) => p.status !== "proposed");
+  return card("The delegation flow (read-only — the kernel is internal)", delegationSVG(teams.length, pending.length)) +
+    pending.map(planCard).join("") +
+    (decided.length ? card("Decided plans", `<table class="t"><tr><th>plan</th><th>status</th><th>decided by</th></tr>${decided.map((p) => `<tr><td>${esc(p.id.slice(0, 8))}… rev ${p.revision}</td><td><span class="pill">${esc(p.status)}</span></td><td>${esc(p.decided_by ?? "—")}</td></tr>`).join("")}</table>`) : "") +
     card(`Mission teams · ${teams.length}`, teams.length ? `<table class="t"><tr><th>team</th><th>lead</th><th>status</th><th>members</th></tr>${teams.map((t) => `<tr><td>${esc(t.name)}</td><td>${esc(t.lead)}</td><td><span class="pill">${esc(t.status)}</span></td><td>${esc(t.members.join(", ") || "—")}</td></tr>`).join("")}</table>` : "No delegated teams yet — submit a delegation-mode run.");
 }
 
@@ -305,6 +320,16 @@ async function renderOps() {
 
 /* ================= post-render wiring ================= */
 function wireView() {
+  document.querySelectorAll(".decide-form").forEach((form) => {
+    form.onsubmit = (e) => e.preventDefault();
+    form.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async (e) => {
+        e.preventDefault();
+        await api2("POST", `/plans/${form.dataset.plan}/${btn.dataset.decision}`, {});
+        await refreshSnapshot(); render();
+      };
+    });
+  });
   const goal = $("goal-form");
   if (goal) goal.onsubmit = async (e) => {
     e.preventDefault();
@@ -425,7 +450,7 @@ function lightMap(ev) {
 }
 
 /* ================= the delegation whiteboard flow ================= */
-function delegationSVG(teamsLive) {
+function delegationSVG(teamsLive, pendingPlans = 0) {
   const bx = (x, y, w, t, live = "") => `
     <g class="node"><rect class="bx" x="${x}" y="${y}" width="${w}" height="40" rx="7"/>
     <text class="nt" x="${x + w / 2}" y="${y + 20}" text-anchor="middle">${t}</text>
@@ -439,7 +464,7 @@ function delegationSVG(teamsLive) {
     ${fl("M450 104 L450 120")}
     ${bx(350, 120, 200, "CEO workforce proposal")}
     ${fl("M450 160 L450 176")}
-    ${bx(350, 176, 200, "Human approve or revise")}
+    ${pendingPlans ? `<g class="node hot">` : `<g class="node">`}<rect class="bx" x="350" y="176" width="200" height="40" rx="7"/><text class="nt" x="450" y="196" text-anchor="middle">Human approve or revise</text>${pendingPlans ? `<text class="live" x="450" y="210" text-anchor="middle">${pendingPlans} waiting for you</text>` : ""}</g>
     ${fl("M420 216 C 350 240 280 240 250 256")}
     ${bx(120, 256, 260, "Permanent workforce · shallow line org")}
     ${fl("M190 296 L150 328")}${fl("M310 296 L350 328")}

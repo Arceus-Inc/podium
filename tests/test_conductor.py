@@ -202,9 +202,13 @@ def test_submit_kwargs_maps_delegation_params() -> None:
 
     from podium.conductor._chorus_executor import _submit_kwargs
 
-    assert _submit_kwargs({}, default_assignee="ace") == {"assignee": "ace"}
-    assert _submit_kwargs({"execution_mode": "delivery"}, default_assignee="ace") == {
+    assert _submit_kwargs({}, default_assignee="ace", ceo="casey") == {"assignee": "ace"}
+    assert _submit_kwargs({"execution_mode": "delivery"}, default_assignee="ace", ceo="casey") == {
         "assignee": "ace"
+    }
+    # CO1: founder intent routes to the CEO — the only employee with governance tools.
+    assert _submit_kwargs({"execution_mode": "formation"}, default_assignee="ace", ceo="casey") == {
+        "assignee": "casey"
     }
 
     kwargs = _submit_kwargs(
@@ -216,6 +220,7 @@ def test_submit_kwargs_maps_delegation_params() -> None:
             "spend_limit_cents": 5000,
         },
         default_assignee="ace",
+        ceo="casey",
     )
     assert kwargs == {
         "assignee": "lea",

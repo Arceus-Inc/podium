@@ -17,6 +17,7 @@ from chorus.ledger import Ledger
 from podium.control._allocation import AllocationFacade
 from podium.control._delegation import DelegationFacade
 from podium.control._direction import DirectionFacade
+from podium.control._governance import GovernanceFacade
 from podium.control._observe import ObserveFacade
 from podium.control._workforce import WorkforceFacade
 
@@ -48,6 +49,10 @@ class CompanyControlPlane:
     @property
     def delegation(self) -> DelegationFacade:
         return DelegationFacade(self._ledger, str(self.company_id))
+
+    @property
+    def governance(self) -> GovernanceFacade:
+        return GovernanceFacade(self._ledger)
 
     @property
     def observe(self) -> ObserveFacade:

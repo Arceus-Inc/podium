@@ -13,8 +13,9 @@ class RunCreate(BaseModel):
     directive: str
     idempotency_key: str
     # One run resource; execution_mode discriminates (M4 §3.3). Delegation params are
-    # meaningful only in delegation mode and required there — fail at the door.
-    execution_mode: Literal["delivery", "delegation"] = "delivery"
+    # meaningful only in delegation mode and required there — fail at the door. Formation
+    # routes to the CEO, whose proposal waits at the /plans human boundary (CO1).
+    execution_mode: Literal["delivery", "delegation", "formation"] = "delivery"
     lead: str | None = None
     goal_id: str | None = None
     max_team_size: int | None = None

@@ -64,6 +64,7 @@ def engine_components(plane: CompanyControlPlane) -> dict[str, Any]:
     spend = plane.observe.spend_total_cents()
     skills_heads = sum(len(plane.observe.skills(member.id)) for member in plane.workforce.roster())
     board = plane.allocation.board()
+    pending_plans = sum(1 for plan in plane.governance.plans() if plan.status == "proposed")
     return {
         "horizon": {"goals": len(goal_roots)},
         "chorus": {
@@ -73,7 +74,7 @@ def engine_components(plane: CompanyControlPlane) -> dict[str, Any]:
             "blocked": status.blocked_tasks,
             "queued_wakes": len(board.queued),
         },
-        "delegation": {"teams": len(teams)},
+        "delegation": {"teams": len(teams), "pending_plans": pending_plans},
         "skills": {"heads": skills_heads},
         "llmops": {"spend_cents": spend},
     }
