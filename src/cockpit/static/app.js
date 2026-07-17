@@ -24,15 +24,25 @@ $("connect-form").addEventListener("submit", (e) => {
   localStorage.setItem("arceus.ctx", JSON.stringify({ workspaceId: state.ctx.workspaceId, companyId: state.ctx.companyId }));
   connect();
 });
-(function restore() {
+const restored = (function restore() {
   const saved = localStorage.getItem("arceus.ctx");
-  if (!saved) return;
+  if (!saved) return false;
   const { workspaceId, companyId } = JSON.parse(saved);
   $("workspace-id").value = workspaceId || "";
   $("company-id").value = companyId || "";
+  // Dev-minted tokens live in sessionStorage only (this tab, until it closes);
+  // tokens the operator types are never stored anywhere.
+  const devToken = sessionStorage.getItem("arceus.dev.token");
+  if (workspaceId && companyId && devToken) {
+    $("token").value = devToken;
+    $("connect-form").requestSubmit();
+    return true;
+  }
+  return false;
 })();
 const playgroundButton = $("new-playground");
 (async function probeBootstrap() {
+  if (restored) { playgroundButton.hidden = false; return; } // don't mint a company per reload
   try {
     const probe = await fetch("/v1/dev/bootstrap", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "playground" }) });
     if (probe.status === 404) return;
@@ -48,6 +58,7 @@ function autoConnect(minted) {
   $("workspace-id").value = minted.workspace_id;
   $("company-id").value = minted.company_id;
   $("token").value = minted.token;
+  sessionStorage.setItem("arceus.dev.token", minted.token);
   $("connect-form").requestSubmit();
 }
 
@@ -136,14 +147,18 @@ function handleFrame(frame) {
 }
 
 /* Every view folds from the same spine (OBS P4). */
+let renderQueued = false;
 function project(ev) {
   laneFold(ev);
   state.feeds.tail = [ev, ...state.feeds.tail].slice(0, 200);
   if (ev.type === "memory.retrieved") state.feeds.memory = [ev, ...state.feeds.memory].slice(0, 50);
   if (ev.type === "run.stalled") { state.feeds.stalled = [ev, ...state.feeds.stalled].slice(0, 50); $("n-ops").textContent = state.feeds.stalled.length; }
-  lightMap(ev);
   const view = location.hash.slice(1) || "overview";
-  if (["overview", "org", "ops", "episodic"].includes(view)) render();
+  if (view === "overview") { lightMap(ev); return; } // mutate the SVG in place — a rebuild would wipe the pulse
+  if (["org", "ops", "episodic"].includes(view) && !renderQueued) {
+    renderQueued = true;
+    setTimeout(() => { renderQueued = false; render(); }, 400); // run.text arrives in bursts
+  }
 }
 
 /* ================= the run dock ================= */
