@@ -1,7 +1,7 @@
 # M5 — the engine state store (Postgres): system design
 
-*2026-07-17 · status: **built** (chorus ledger; lattice stores deferred to M5-L, below) · **folds the
-old M7 into M5** · unblocks the M4 control plane*
+*2026-07-17 · status: **built** (chorus ledger; lattice stores stay SQLite by design, below) ·
+**folds the old M7 into M5** · unblocks the M4 control plane*
 
 > **Landed** (branches: podium `feat/podium-m5-uuid`, chorus `feat/postgres-ledger`): podium ids →
 > uuid (§6.1); chorus uuidv7 ids + dialect-neutral repos + `PostgresLedger` (native
@@ -11,10 +11,19 @@ old M7 into M5** · unblocks the M4 control plane*
 > migration 0008 (engine tables + grants), `CompanyConfig.ledger_dsn`, conductor `ledger_backend`
 > routing, company ownership (`owner_user_id`, §2.5), and the provisioning saga (§3.5).
 >
-> **Deferred to M5-L**: the lattice Memory/Skill stores port — lattice persists via its own
-> git-markdown/file engines (spec 12 routing), a separate storage surface from the chorus ledger;
-> porting it is its own scoped effort and does not block M4 (which needs the ledger, landed).
-> **Also open**: flipping `ledger_backend` default to postgres (after soak), object-store log mirror.
+> **M5-L resolved (2026-07-17): the memory/skills stores STAY SQLite, by design.** The ledger
+> needed Postgres because it is shared operational truth (multi-tenant, RLS-walled, read by
+> api + conductor + beats). Episodic memory and skills are the opposite shape: single-writer,
+> company-workdir-local files read only by that company's beat processes, riding a filesystem
+> that is already host-bound (worktrees, org repo, lattice consolidation, horizon's JSON stores)
+> — so a Postgres port dissolves no constraint the workdir still imposes. Episodic capture is
+> advisory learning telemetry (never correctness-bearing); FTS5 gives BM25 + snippets natively.
+> M4d's read-only skills/learning doors inherit the same shared-FS constraint M3c documented for
+> `/logs`, with the same later fix (read mirror). If a genuine cross-host need appears, port the
+> skills store alone (2 tables, no FTS) as a delta in `chorus.ledger.migrations` — the authored
+> Postgres migration stream (applied-set over the frozen baseline) that now handles all engine
+> schema evolution. A full port attempt exists as chorus commit `abf038e` (reverted) for reference.
+> **Also open**: object-store log mirror.
 
 The plan staged the chorus ledger port in two milestones: **M5** = PostgresLedger, *schema-per-company*
 (zero chorus schema change); **M7** = tenant-aware *shared-schema* (`company_id` + FORCE RLS). This
