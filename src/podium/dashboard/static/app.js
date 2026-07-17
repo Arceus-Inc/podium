@@ -148,8 +148,13 @@ const LANE_STATES = {
 
 function laneFold(event) {
   if (!event.employee_id) return; // company-level event — system row, never a lane default (P2)
-  const lane = state.lanes.get(event.employee_id);
-  if (!lane) return;
+  let lane = state.lanes.get(event.employee_id);
+  if (!lane) {
+    // An employee hired after the snapshot (e.g. the conductor's default worker) gets a lane
+    // on first sight — live truth beats the seed (found by the live e2e: Ace had no lane).
+    lane = { name: event.employee_id, role: "", status: "idle", taskId: null, runId: null, lastEvents: [] };
+    state.lanes.set(event.employee_id, lane);
+  }
   const mapped = LANE_STATES[event.type];
   if (mapped) lane.status = mapped;
   if (event.task_id) lane.taskId = event.task_id;
