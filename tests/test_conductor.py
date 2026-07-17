@@ -206,6 +206,10 @@ def test_submit_kwargs_maps_delegation_params() -> None:
     assert _submit_kwargs({"execution_mode": "delivery"}, default_assignee="ace", ceo="casey") == {
         "assignee": "ace"
     }
+    # Delivery runs can be directed at any employee of the formed org (default worker otherwise).
+    assert _submit_kwargs(
+        {"assignee": "new_backend_eng_2"}, default_assignee="ace", ceo="casey"
+    ) == {"assignee": "new_backend_eng_2"}
     # CO1: founder intent routes to the CEO — the only employee with governance tools.
     assert _submit_kwargs({"execution_mode": "formation"}, default_assignee="ace", ceo="casey") == {
         "assignee": "casey"

@@ -145,7 +145,7 @@ def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -
         # typed proposal it leaves stays pending until a human hits the /plans doors.
         return {"assignee": ceo}
     if mode != "delegation":
-        return {"assignee": default_assignee}
+        return {"assignee": str(params.get("assignee") or default_assignee)}
     from chorus.ledger import ExecutionMode
 
     kwargs: dict[str, Any] = {
