@@ -375,3 +375,59 @@ async def test_allocation_snapshot_reads_ledger_truth(
     assert body["running"][0]["employee_id"] == "ada"
     assert body["running"][0]["lease_expires_at"] is not None
     assert isinstance(body["blocked"], list)
+
+
+async def test_costs_door_aggregates_spend(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /costs?by=model|employee|day folds the engine's priced spend ledger."""
+    from datetime import UTC, datetime
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.ledger._models import CostEvent
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="co")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        for n, (model, cents) in enumerate([("gpt-x", 300), ("gpt-mini", 50)]):
+            ledger.cost_events.record(
+                CostEvent(
+                    id=mint_id(),
+                    employee_id="ada",
+                    provider="dream",
+                    model=model,
+                    cost_cents=cents,
+                    input_tokens=100,
+                    output_tokens=20,
+                    occurred_at=datetime(2026, 6, 1 + n, tzinfo=UTC),
+                )
+            )
+    finally:
+        ledger.close()
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/costs"
+
+    by_model = await api.get(f"{base}?by=model", headers=headers)
+    assert by_model.status_code == 200
+    rows = by_model.json()
+    assert rows[0] == {
+        "key": "gpt-x",
+        "cost_cents": 300,
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "events": 1,
+    }
+
+    default_grouping = await api.get(base, headers=headers)  # day is the default window unit
+    assert default_grouping.status_code == 200
+    assert {row["key"] for row in default_grouping.json()} == {"2026-06-01", "2026-06-02"}
+
+    bad = await api.get(f"{base}?by=provider", headers=headers)
+    assert bad.status_code == 422

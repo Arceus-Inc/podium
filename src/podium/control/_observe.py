@@ -36,6 +36,18 @@ class SkillSummary(BaseModel):
     revision_no: int
 
 
+class SpendRow(BaseModel):
+    """One aggregate of the priced spend ledger (chorus cost_event — the source of truth)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str  # model name | employee slug | ISO day, per the grouping
+    cost_cents: int
+    input_tokens: int
+    output_tokens: int
+    events: int
+
+
 class ObserveFacade:
     """Pure delegation to LedgerInspector projections + the skills tables; translation only."""
 
@@ -53,6 +65,19 @@ class ObserveFacade:
             open_incidents=len(status.open_incidents),
         )
 
+    def costs(self, by: str) -> list[SpendRow]:
+        """Spend grouped by the engine's own aggregate (model | employee | day)."""
+        return [
+            SpendRow(
+                key=group.key,
+                cost_cents=group.cost_cents,
+                input_tokens=group.input_tokens,
+                output_tokens=group.output_tokens,
+                events=group.events,
+            )
+            for group in self._ledger.cost_events.grouped(by)
+        ]
+
     def skills(self, employee_id: str) -> list[SkillSummary]:
         """One employee's active skill HEADs (evolution is internal — this is telemetry)."""
         return [
@@ -68,4 +93,4 @@ class ObserveFacade:
         ]
 
 
-__all__ = ["CompanyStatus", "ObserveFacade", "SkillSummary"]
+__all__ = ["CompanyStatus", "ObserveFacade", "SkillSummary", "SpendRow"]
