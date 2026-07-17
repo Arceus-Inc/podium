@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from chorus.ledger import Ledger
 
+from podium.control._allocation import AllocationFacade
 from podium.control._delegation import DelegationFacade
 from podium.control._direction import DirectionFacade
 from podium.control._observe import ObserveFacade
@@ -31,6 +32,10 @@ class CompanyControlPlane:
         self.workspace_id = workspace_id
         self.company_id = company_id
         self._ledger = ledger
+
+    @property
+    def allocation(self) -> AllocationFacade:
+        return AllocationFacade(self._ledger)
 
     @property
     def direction(self) -> DirectionFacade:

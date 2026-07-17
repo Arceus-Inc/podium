@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -230,3 +230,44 @@ async def reclaim_run(session: AsyncSession, run_id: uuid.UUID) -> bool:
         .returning(Run.id)
     )
     return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def runs_by_status(session: AsyncSession, company_id: uuid.UUID) -> dict[str, int]:
+    """Run lifecycle counts for one company (the overview's product-DB half)."""
+    stmt = select(Run.status, func.count()).where(Run.company_id == company_id).group_by(Run.status)
+    rows = (await session.execute(stmt)).all()
+    return {str(status): int(count) for status, count in rows}
+
+
+async def rollup_run_counts(session: AsyncSession, run_id: uuid.UUID) -> dict[str, int]:
+    """Fold the run's mirrored events into ``runs.counts`` (CP-4, OBS §5).
+
+    A projection of the spine, computed once at finalize: event volume, llm calls with token
+    sums, and tool activity. Idempotent — recomputing from the same events yields the same fold.
+    """
+    from podium.events.models import Event
+
+    rows = (
+        await session.execute(select(Event.type, Event.payload).where(Event.run_id == run_id))
+    ).all()
+    counts = {
+        "events": len(rows),
+        "llm_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "tool_calls": 0,
+        "tool_errors": 0,
+    }
+    for event_type, payload in rows:
+        if event_type == "llm.call":
+            counts["llm_calls"] += 1
+            counts["input_tokens"] += int(payload.get("input_tokens", 0))
+            counts["output_tokens"] += int(payload.get("output_tokens", 0))
+        elif event_type == "run.tool_use":
+            counts["tool_calls"] += 1
+        elif event_type == "run.tool_result" and payload.get("is_error"):
+            counts["tool_errors"] += 1
+    await session.execute(
+        update(Run).where(Run.id == run_id).values(counts=counts, updated_at=_now())
+    )
+    return counts

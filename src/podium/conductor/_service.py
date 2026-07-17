@@ -25,6 +25,7 @@ from podium.runs import (
     queued_run_refs,
     reclaim_run,
     renew_lease,
+    rollup_run_counts,
 )
 
 _log = structlog.get_logger("podium.conductor")
@@ -123,6 +124,7 @@ class Conductor:
             await finalize_run(
                 session, ref.id, owner=self._worker_id, status=result.status, error=result.error
             )
+            await rollup_run_counts(session, ref.id)  # the run's spine folded once, durably
 
     async def _renew_lease_loop(self, ref: RunRef) -> None:
         while True:

@@ -314,3 +314,205 @@ async def test_hire_and_terminate_doors(
 
     missing = await api.delete(f"{base}/employees/nobody", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_allocation_snapshot_reads_ledger_truth(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: allocation is observable state (OBS P6) — queued wakes, running beats with leases,
+    blocked tasks — read from the ledger, never reconstructed from events."""
+    from datetime import UTC, datetime, timedelta
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Run, RunStatus, Task, TaskStatus, Wake, WakeReason
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="al")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        queued_task = mint_id()
+        ledger.tasks.submit(Task(id=queued_task, intent="waiting", assignee_employee_id="ada"))
+        ledger.tasks.set_status(queued_task, TaskStatus.TODO)
+        ledger.wakes.enqueue(
+            Wake(
+                id=mint_id(),
+                employee_id="ada",
+                reason=WakeReason.TASK_ASSIGNED,
+                payload={"task_id": queued_task},
+            )
+        )
+        running_task = mint_id()
+        run_id = mint_id()
+        ledger.tasks.submit(Task(id=running_task, intent="live", assignee_employee_id="ada"))
+        ledger.tasks.set_status(running_task, TaskStatus.TODO)
+        assert ledger.tasks.checkout(running_task, employee_id="ada", run_id=run_id)
+        ledger.runs.create(
+            Run(
+                id=run_id,
+                employee_id="ada",
+                task_id=running_task,
+                status=RunStatus.RUNNING,
+                lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                started_at=datetime.now(UTC),
+            )
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/allocation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [q["task_id"] for q in body["queued"]] == [queued_task]
+    assert body["queued"][0]["reason"] == "task_assigned"
+    assert [r["run_id"] for r in body["running"]] == [run_id]
+    assert body["running"][0]["employee_id"] == "ada"
+    assert body["running"][0]["lease_expires_at"] is not None
+    assert isinstance(body["blocked"], list)
+
+
+async def test_costs_door_aggregates_spend(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /costs?by=model|employee|day folds the engine's priced spend ledger."""
+    from datetime import UTC, datetime
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.ledger._models import CostEvent
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="co")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        for n, (model, cents) in enumerate([("gpt-x", 300), ("gpt-mini", 50)]):
+            ledger.cost_events.record(
+                CostEvent(
+                    id=mint_id(),
+                    employee_id="ada",
+                    provider="dream",
+                    model=model,
+                    cost_cents=cents,
+                    input_tokens=100,
+                    output_tokens=20,
+                    occurred_at=datetime(2026, 6, 1 + n, tzinfo=UTC),
+                )
+            )
+    finally:
+        ledger.close()
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/costs"
+
+    by_model = await api.get(f"{base}?by=model", headers=headers)
+    assert by_model.status_code == 200
+    rows = by_model.json()
+    assert rows[0] == {
+        "key": "gpt-x",
+        "cost_cents": 300,
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "events": 1,
+    }
+
+    default_grouping = await api.get(base, headers=headers)  # day is the default window unit
+    assert default_grouping.status_code == 200
+    assert {row["key"] for row in default_grouping.json()} == {"2026-06-01", "2026-06-02"}
+
+    bad = await api.get(f"{base}?by=provider", headers=headers)
+    assert bad.status_code == 422
+
+
+async def test_overview_combines_product_and_engine_truth(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /overview — runs by status (product DB) + workforce/tasks/spend (engine ledger)."""
+    from datetime import UTC, datetime
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.ledger._models import CostEvent
+    from chorus.workforce import Employee
+
+    from podium.db import tenant_session
+    from podium.runs import create_run
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="ov")
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        await create_run(
+            s, workspace_id=ws_id, company_id=company_id, directive="d1", idempotency_key="o1"
+        )
+        await create_run(
+            s, workspace_id=ws_id, company_id=company_id, directive="d2", idempotency_key="o2"
+        )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.cost_events.record(
+            CostEvent(
+                id=mint_id(),
+                employee_id="ada",
+                provider="dream",
+                model="gpt-x",
+                cost_cents=250,
+                occurred_at=datetime(2026, 6, 1, tzinfo=UTC),
+            )
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/overview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runs_by_status"] == {"queued": 2}
+    assert body["employees"] == 1
+    assert body["spend_cents"] == 250
+    assert body["running_beats"] == 0
+
+
+async def test_report_door_serves_the_org_rollup(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /report — the inspector's combined manager+leaf rollup, flat counts only."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Task
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="rp")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.tasks.submit(Task(id=mint_id(), intent="one open task"))
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/report",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["employees"] == 1
+    assert body["tasks_total"] == 1
+    assert body["tasks_done"] == 0
+    assert 0.0 <= body["completion_rate"] <= 1.0

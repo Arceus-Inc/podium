@@ -5,6 +5,13 @@ one place the four engines' facades compose into a product surface. HTTP routers
 snapshots map onto its sub-facades 1:1; nothing past the plane sees engine internals.
 """
 
+from podium.control._allocation import (
+    AllocationBoard,
+    AllocationFacade,
+    BlockedTask,
+    QueuedWake,
+    RunningBeat,
+)
 from podium.control._delegation import CapacityEntry, DelegationFacade, TeamSummary
 from podium.control._direction import DirectionFacade, GoalNode
 from podium.control._observe import CompanyStatus, ObserveFacade, SkillSummary
@@ -12,6 +19,9 @@ from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
 from podium.control._workforce import EmployeeView, WorkforceFacade
 
 __all__ = [
+    "AllocationBoard",
+    "AllocationFacade",
+    "BlockedTask",
     "CapacityEntry",
     "CompanyControlPlane",
     "CompanyStatus",
@@ -21,6 +31,8 @@ __all__ = [
     "EmployeeView",
     "GoalNode",
     "ObserveFacade",
+    "QueuedWake",
+    "RunningBeat",
     "SkillSummary",
     "TeamSummary",
     "WorkforceFacade",
