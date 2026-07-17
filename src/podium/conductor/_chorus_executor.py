@@ -69,12 +69,22 @@ class CompanyGraphHost:
         self._runtimes: dict[uuid.UUID, _CompanyRuntime] = {}
 
     async def _ledger_dsn_for(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> str | None:
-        """The engine-ledger DSN for a company, per its `ledger_backend` flag (M5 rollout lever)."""
+        """The engine-ledger DSN for a company, per its `ledger_backend` flag (M5 rollout lever).
+
+        Read on cache miss only: flipping a live company's backend takes effect on the next
+        conductor restart (the cached runtime keeps its ledger). A postgres-flagged company with no
+        DSN configured is a deployment error and raises — never a silent SQLite downgrade.
+        """
         async with tenant_session(self._app_sm, workspace_id) as session:
             company = await get_company(session, company_id)
         if company is None or company.ledger_backend != "postgres":
             return None
-        return self._engine_ledger_dsn or None
+        if not self._engine_ledger_dsn:
+            raise RuntimeError(
+                f"company {company_id} has ledger_backend='postgres' but the host was built "
+                "without engine_ledger_dsn — refusing to downgrade its engine state to SQLite"
+            )
+        return self._engine_ledger_dsn
 
     async def ensure(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> _CompanyRuntime:
         existing = self._runtimes.get(company_id)
@@ -126,6 +136,9 @@ class CompanyGraphHost:
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
             await runtime.ingest.stop()
+            # A Postgres-backed company holds a live server connection — close it cleanly (the
+            # SQLite driver's close is a cheap file-handle release).
+            runtime.graph.org._ledger.close()
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:

@@ -1,6 +1,20 @@
 # M5 — the engine state store (Postgres): system design
 
-*2026-07-17 · status: proposed · **folds the old M7 into M5** · unblocks the M4 control plane*
+*2026-07-17 · status: **built** (chorus ledger; lattice stores deferred to M5-L, below) · **folds the
+old M7 into M5** · unblocks the M4 control plane*
+
+> **Landed** (branches: podium `feat/podium-m5-uuid`, chorus `feat/postgres-ledger`): podium ids →
+> uuid (§6.1); chorus uuidv7 ids + dialect-neutral repos + `PostgresLedger` (native
+> uuid/timestamptz/jsonb/boolean) + `company_id`+FORCE RLS + composite semantic identity (employee
+> slugs) + driver-neutral `LedgerIntegrityError` + savepoint-per-write; 53-test conformance suite ×
+> both drivers incl. no-leak, fail-closed, and same-company two-connection concurrency; podium
+> migration 0008 (engine tables + grants), `CompanyConfig.ledger_dsn`, conductor `ledger_backend`
+> routing, company ownership (`owner_user_id`, §2.5), and the provisioning saga (§3.5).
+>
+> **Deferred to M5-L**: the lattice Memory/Skill stores port — lattice persists via its own
+> git-markdown/file engines (spec 12 routing), a separate storage surface from the chorus ledger;
+> porting it is its own scoped effort and does not block M4 (which needs the ledger, landed).
+> **Also open**: flipping `ledger_backend` default to postgres (after soak), object-store log mirror.
 
 The plan staged the chorus ledger port in two milestones: **M5** = PostgresLedger, *schema-per-company*
 (zero chorus schema change); **M7** = tenant-aware *shared-schema* (`company_id` + FORCE RLS). This

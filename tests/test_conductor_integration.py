@@ -13,11 +13,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from podium.companies import create_company
 from podium.conductor import Conductor
 from podium.conductor._chorus_executor import ChorusRunExecutor, CompanyGraphHost
 from podium.db import tenant_session
 from podium.events import list_run_events
+from podium.logs import RunLogStore
 from podium.runs import TERMINAL_STATUSES, RunStatus, create_run, get_run
 from podium.workspaces import create_workspace
 
@@ -42,7 +44,10 @@ def _azure_creds() -> tuple[str, str, str] | None:
     return key, base, deployment
 
 
+@pytest.mark.parametrize("ledger_backend", ["sqlite", "postgres"])
 async def test_real_run_reaches_a_terminal_status(
+    ledger_backend: str,
+    database_url: str,
     tmp_path: Path,
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
@@ -54,7 +59,9 @@ async def test_real_run_reaches_a_terminal_status(
 
     async with sessionmaker() as s, s.begin():
         ws = await create_workspace(s, name="Integration", slug="integ")
-        company = await create_company(s, workspace_id=ws.id, slug="acme", name="Acme")
+        company = await create_company(
+            s, workspace_id=ws.id, slug="acme", name="Acme", ledger_backend=ledger_backend
+        )
         ws_id, company_id = ws.id, company.id
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run, _ = await create_run(
@@ -72,6 +79,10 @@ async def test_real_run_reaches_a_terminal_status(
         deployment=deployment,
         workdir=tmp_path,
         app_sessionmaker=app_sessionmaker,
+        log_store=RunLogStore(tmp_path / "logs"),
+        engine_ledger_dsn=database_url.replace("+asyncpg", "").replace(
+            "://postgres@", "://podium_app@"
+        ),
     )
     # A real agent building to chorus's DoD takes many slow beats; a modest budget proves the run
     # engages the real model + heartbeat (queued→running→a terminal state). For a full succeed-to-DoD

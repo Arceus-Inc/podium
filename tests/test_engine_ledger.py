@@ -152,6 +152,35 @@ async def test_conductor_host_honours_the_ledger_backend_flag(
         await host.aclose()
 
 
+async def test_postgres_company_without_dsn_fails_loud(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+) -> None:
+    """A postgres-flagged company on a host built without engine_ledger_dsn is a deployment
+    error — it must raise, never silently downgrade the engine state to a local SQLite file."""
+    from podium.companies import create_company
+    from podium.conductor._chorus_executor import CompanyGraphHost
+    from podium.logs import RunLogStore
+    from podium.workspaces import create_workspace
+
+    async with sessionmaker() as s, s.begin():
+        ws = await create_workspace(s, name="A", slug="a")
+        company = await create_company(
+            s, workspace_id=ws.id, slug="pg", name="PG", ledger_backend="postgres"
+        )
+        ws_id, company_id = ws.id, company.id
+    host = CompanyGraphHost(
+        **_FAKE_MODEL,
+        workdir=tmp_path,
+        app_sessionmaker=app_sessionmaker,
+        log_store=RunLogStore(tmp_path / "logs"),
+    )
+    with pytest.raises(RuntimeError, match="refusing to downgrade"):
+        await host.ensure(company_id, ws_id)
+    await host.aclose()
+
+
 def test_non_uuid_company_id_is_rejected_for_postgres(tmp_path: Path) -> None:
     """The RLS GUC casts to uuid — a non-uuid company id must fail at build time, not mid-query."""
     with pytest.raises(ValueError, match="uuid"):
