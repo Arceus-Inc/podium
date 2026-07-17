@@ -216,3 +216,52 @@ async def test_patch_goal_rejects_unknown_status_and_goal(
 
     missing = await api.patch(f"{base}/{mint_id()}", headers=headers, json={"status": "archived"})
     assert missing.status_code == 404
+
+
+async def test_post_goal_seeds_direction(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """Set direction over HTTP: create a root goal, then a child under it — the tree is durable
+    engine truth (horizon's mirror), visible immediately through GET /goals."""
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="sd")
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/goals"
+
+    root = await api.post(
+        base, headers=headers, json={"title": "Win launch week", "level": "company"}
+    )
+    assert root.status_code == 201
+    root_id = root.json()["id"]
+    assert root.json()["status"] == "active"
+
+    child = await api.post(
+        base,
+        headers=headers,
+        json={"title": "Ship the page", "level": "team", "parent_id": root_id},
+    )
+    assert child.status_code == 201
+
+    tree = await api.get(base, headers=headers)
+    assert [node["id"] for node in tree.json()] == [root_id]
+    assert [c["title"] for c in tree.json()[0]["children"]] == ["Ship the page"]
+
+
+async def test_post_goal_rejects_unknown_parent_and_level(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    from chorus.ids import mint_id
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="sd2")
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/goals"
+
+    bad_level = await api.post(base, headers=headers, json={"title": "x", "level": "galaxy"})
+    assert bad_level.status_code == 422
+
+    orphan = await api.post(
+        base, headers=headers, json={"title": "x", "level": "team", "parent_id": mint_id()}
+    )
+    assert orphan.status_code == 404  # a child must attach to an existing goal

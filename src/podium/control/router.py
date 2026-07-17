@@ -198,3 +198,32 @@ async def patch_goal(
     if node is None:
         raise HTTPException(status_code=404, detail="goal not found")
     return node
+
+
+class GoalCreate(BaseModel):
+    title: str
+    level: Literal["company", "team", "employee", "task", "goal"]
+    parent_id: str | None = None
+
+
+@router.post("/goals", status_code=201, response_model=GoalNode)
+async def create_goal(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    body: GoalCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> GoalNode:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    node = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.create_goal(
+            title=body.title, level=body.level, parent_id=body.parent_id
+        ),
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="parent goal not found")
+    return node
