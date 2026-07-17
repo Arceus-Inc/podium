@@ -235,6 +235,13 @@ async function renderDirection() {
 }
 
 async function renderOrg() {
+  // The roster is the source of truth; events only animate it. An employee materialized by a
+  // plan approval must appear before their first beat.
+  for (const member of await api("/workforce")) {
+    const lane = state.lanes.get(member.id);
+    if (!lane) state.lanes.set(member.id, { name: member.name, role: member.role, status: member.status, taskId: null, runId: null, lastEvents: [] });
+    else { lane.name = member.name; lane.role = member.role; }
+  }
   const lanes = [...state.lanes.entries()].map(([id, lane]) => `
     <article class="lane state-${lane.status}">
       <header><strong>${esc(lane.name)}</strong> <em>${esc(lane.role)}</em><span class="chip pill">${esc(lane.status)}</span></header>
