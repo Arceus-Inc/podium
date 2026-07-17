@@ -43,3 +43,22 @@ async def test_dashboard_shell_names_the_tabs(api: httpx.AsyncClient) -> None:
     body = (await api.get("/dashboard")).text
     for tab in ("Org", "Work", "Runs", "Costs", "Ops"):
         assert tab in body
+
+
+def test_bootstrap_db_role_sql_is_idempotent_and_fail_closed() -> None:
+    """The migrate service's role DDL: NOSUPERUSER NOBYPASSRLS (RLS is the tenancy wall)."""
+    from podium.bootstrap_db import _ENSURE_ROLE
+
+    assert "NOSUPERUSER" in _ENSURE_ROLE
+    assert "NOBYPASSRLS" in _ENSURE_ROLE
+    assert "IF NOT EXISTS" in _ENSURE_ROLE  # rerunning migrate is a no-op
+
+
+async def test_readyz_verifies_engine_deltas(api: httpx.AsyncClient) -> None:
+    """CP-6: readiness proves the DB AND that every shipped engine delta is applied — a deploy
+    whose migrate step was skipped reads not-ready, never half-working."""
+    response = await api.get("/readyz")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["engine_deltas"] == "applied"
