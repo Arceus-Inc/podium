@@ -32,6 +32,10 @@ class RunLogStore:
         self._root = root
 
     def _path(self, run_id: uuid.UUID) -> Path:
+        # Defense-in-depth behind the type wall: this class writes to the filesystem, so refuse a
+        # smuggled string at runtime too (canonical uuid text can never traverse paths).
+        if not isinstance(run_id, uuid.UUID):
+            raise TypeError(f"run_id must be uuid.UUID, got {type(run_id).__name__}")
         return self._root / f"{run_id}.log"
 
     def ref(self, run_id: uuid.UUID) -> str:

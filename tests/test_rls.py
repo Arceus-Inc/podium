@@ -6,6 +6,9 @@ actually bites; superuser setup happens only through the control-plane `sessionm
 
 from __future__ import annotations
 
+import uuid
+from uuid import uuid4
+
 import pytest
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,7 +18,9 @@ from podium.db import tenant_session
 from podium.workspaces import create_workspace
 
 
-async def _two_workspaces(admin: async_sessionmaker[AsyncSession]) -> tuple[str, str]:
+async def _two_workspaces(
+    admin: async_sessionmaker[AsyncSession],
+) -> tuple[uuid.UUID, uuid.UUID]:
     async with admin() as session, session.begin():
         a = await create_workspace(session, name="Alpha", slug="alpha")
         b = await create_workspace(session, name="Beta", slug="beta")
@@ -65,5 +70,5 @@ async def test_app_role_cannot_create_workspaces(
 ) -> None:
     # Creating the tenant root is control-plane only; podium_app has no INSERT on workspaces.
     with pytest.raises(ProgrammingError):
-        async with tenant_session(app_sessionmaker, "ws_nope") as s:
+        async with tenant_session(app_sessionmaker, uuid4()) as s:
             await create_workspace(s, name="Nope", slug="nope")

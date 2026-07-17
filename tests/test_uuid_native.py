@@ -99,3 +99,22 @@ async def test_rls_still_bites_with_uuid_guc(
     async with tenant_session(app_sessionmaker, b_id) as s:
         rows = (await s.execute(text("SELECT id FROM companies"))).all()
     assert rows == []  # B's uuid-scoped session sees none of A's rows
+
+
+async def test_rls_fails_closed_on_reset_empty_guc(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The Postgres gotcha the NULLIF cast exists for: after a transaction-local GUC ends, the same
+    connection reports '' (empty string), not NULL — and ''::uuid would ERROR. The policy must
+    treat '' exactly like unset: zero rows, no exception."""
+    async with sessionmaker() as s, s.begin():
+        ws = await create_workspace(s, name="Gamma", slug="gamma")
+        ws_id = ws.id
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        await create_company(s, workspace_id=ws_id, slug="c", name="G Co")
+    async with app_sessionmaker() as s:
+        # Force the reset-to-'' state explicitly on this very connection, then query.
+        await s.execute(text("SELECT set_config('app.workspace_id', '', false)"))
+        rows = (await s.execute(text("SELECT id FROM companies"))).all()
+    assert rows == []  # '' fails closed — no rows, no InvalidTextRepresentation error
