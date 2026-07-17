@@ -107,25 +107,61 @@ function renderLanes() {
   }
 }
 
-/* ---------- the spine: one EventSource, demuxed ---------- */
-function openStream() {
-  if (state.stream) state.stream.close();
-  const url = `/v1/companies/${state.ctx.companyId}/stream?access_token=${encodeURIComponent(
-    state.ctx.token
-  )}`;
-  const stream = new EventSource(url);
-  state.stream = stream;
-  stream.onopen = () => setStatus("live");
-  stream.onerror = () => setStatus("reconnecting"); // EventSource retries with Last-Event-ID
-  stream.onmessage = (message) => {
-    let event;
+/* ---------- the spine: one SSE connection, demuxed ----------
+ * The stream emits NAMED events (`event: run.text`), which EventSource.onmessage never
+ * delivers (found by live visual test: a silent dashboard over a talking stream). A small
+ * fetch-based reader handles every name, sends the token as a header (never in the URL),
+ * and resumes from Last-Event-ID on reconnect. */
+let lastEventId = null;
+let streamGeneration = 0;
+
+async function openStream() {
+  const generation = ++streamGeneration; // a reconnect invalidates older readers
+  setStatus("connecting");
+  while (generation === streamGeneration) {
     try {
-      event = JSON.parse(message.data);
+      const headers = { Authorization: `Bearer ${state.ctx.token}` };
+      if (lastEventId !== null) headers["Last-Event-ID"] = String(lastEventId);
+      const response = await fetch(`/v1/companies/${state.ctx.companyId}/stream`, { headers });
+      if (!response.ok) throw new Error(`stream -> ${response.status}`);
+      setStatus("live");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          handleFrame(frame);
+        }
+      }
     } catch {
-      return; // never let one bad frame kill the demux
+      // fall through to retry
     }
-    project(event);
-  };
+    if (generation !== streamGeneration) return;
+    setStatus("reconnecting");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+
+function handleFrame(frame) {
+  let data = "";
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("id:")) lastEventId = line.slice(3).trim();
+    else if (line.startsWith("data:")) data += line.slice(5).trim();
+  }
+  if (!data) return; // comments / keepalives
+  let event;
+  try {
+    event = JSON.parse(data);
+  } catch {
+    return; // never let one bad frame kill the demux
+  }
+  project(event);
 }
 
 /* Every view is a fold over the same events (OBS P4) — add a projection, not a collector. */

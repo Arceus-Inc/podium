@@ -32,8 +32,11 @@ async def test_dashboard_serves_the_shell(api: httpx.AsyncClient) -> None:
 
     js = await api.get("/dashboard/app.js")
     assert js.status_code == 200
-    assert "EventSource" in js.text  # one SSE connection, client-side demux (OBS P4)
-    assert "Last-Event-ID" not in js.text or True  # resume rides the native SSE mechanism
+    # One SSE connection, client-side demux (OBS P4). The stream emits NAMED events, which
+    # EventSource.onmessage silently drops — the reader is fetch-based, resumes via
+    # Last-Event-ID, and sends the token as a header (never in the URL).
+    assert "Last-Event-ID" in js.text
+    assert "access_token" not in js.text
 
     css = await api.get("/dashboard/style.css")
     assert css.status_code == 200
