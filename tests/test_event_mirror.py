@@ -119,3 +119,41 @@ async def test_trace_and_task_land_on_the_row_and_route_the_run(
     assert str(rows[0].trace_id) == root
     assert rows[0].task_id == child
     assert rows[0].employee_id == "ada"
+
+
+async def test_rollup_run_counts_folds_the_spine(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """CP-4: runs.counts is a fold of the run's own events — llm calls, tokens, tool activity."""
+    from podium.runs import get_run, rollup_run_counts
+
+    ws_id, company_id, run_id = await _company_with_run(sessionmaker)
+    mirror = EventMirror(app_sessionmaker, company_id=company_id, workspace_id=ws_id)
+    mirror.register_run(run_id=run_id, engine_task_id="task_root")
+
+    await mirror.record(type="run.started", payload={}, task_id="task_root")
+    await mirror.record(type="run.tool_use", payload={"tool": "bash"}, task_id="task_root")
+    await mirror.record(type="run.tool_result", payload={"is_error": True}, task_id="task_root")
+    await mirror.record(
+        type="llm.call",
+        payload={"input_tokens": 1200, "output_tokens": 300, "cost_usd": 0.01},
+        task_id="task_root",
+    )
+    await mirror.record(
+        type="llm.call",
+        payload={"input_tokens": 800, "output_tokens": 100, "cost_usd": 0.005},
+        task_id="task_root",
+    )
+
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        await rollup_run_counts(s, run_id)
+        run = await get_run(s, run_id)
+
+    assert run is not None
+    assert run.counts["events"] == 5
+    assert run.counts["llm_calls"] == 2
+    assert run.counts["input_tokens"] == 2000
+    assert run.counts["output_tokens"] == 400
+    assert run.counts["tool_calls"] == 1
+    assert run.counts["tool_errors"] == 1
