@@ -78,7 +78,7 @@ class AllocationFacade:
             BlockedTask(
                 task_id=view.id,
                 intent_excerpt=view.intent[:200],
-                assignee=view.assignee_employee_id,
+                assignee=view.assignee,
             )
             for view in LedgerInspector(self._ledger).stuck()
         ]
