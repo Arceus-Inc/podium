@@ -72,3 +72,36 @@ async def test_readyz_verifies_engine_deltas(api: httpx.AsyncClient) -> None:
     body = response.json()
     assert body["status"] == "ready"
     assert body["engine_deltas"] == "applied"
+
+
+async def test_dev_bootstrap_registers_a_playground(
+    database_url: str,
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """One click, zero uuid-pasting: the dev door mints workspace + company + token. Gated —
+    it uses the privileged control connection, so it must be explicitly enabled."""
+    from podium.db import make_engine, make_sessionmaker
+
+    app = create_app()
+    app.state.sessionmaker = app_sessionmaker
+    app.state.bootstrap_sessionmaker = make_sessionmaker(make_engine(database_url))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        created = await client.post("/v1/dev/bootstrap", json={"name": "Wax Works"})
+        assert created.status_code == 201
+        body = created.json()
+        assert set(body) == {"workspace_id", "company_id", "token"}
+
+        # The minted token is live: the control doors accept it immediately.
+        roster = await client.get(
+            f"/v1/workspaces/{body['workspace_id']}/companies/{body['company_id']}/workforce",
+            headers={"Authorization": f"Bearer {body['token']}"},
+        )
+        # 200 with empty roster (no engine ledger wired in this app instance is fine → 503),
+        # but auth/visibility must pass — never 401/403/404.
+        assert roster.status_code in (200, 503)
+
+
+async def test_dev_bootstrap_is_absent_unless_enabled(api: httpx.AsyncClient) -> None:
+    response = await api.post("/v1/dev/bootstrap", json={})
+    assert response.status_code == 404  # fail-closed: no privileged door by default

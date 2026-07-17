@@ -293,3 +293,42 @@ document.getElementById("run-form").addEventListener("submit", async (event) => 
     status.textContent = String(error);
   }
 });
+
+
+/* ---------- zero-paste onboarding: the dev bootstrap door ---------- */
+const playgroundButton = document.getElementById("new-playground");
+
+(async function probeBootstrap() {
+  try {
+    // The gate 404s when closed; a 422 (missing body is fine — we send one) or 201 means open.
+    const probe = await fetch("/v1/dev/bootstrap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "__probe__" }),
+    });
+    if (probe.status === 404) return; // production shape — no button, no door
+    playgroundButton.hidden = false;
+    if (probe.ok) {
+      // The probe already minted one — use it rather than minting twice.
+      autoConnect(await probe.json());
+    }
+  } catch {
+    /* api unreachable — the form stays manual */
+  }
+})();
+
+playgroundButton.addEventListener("click", async () => {
+  const response = await fetch("/v1/dev/bootstrap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "playground" }),
+  });
+  if (response.ok) autoConnect(await response.json());
+});
+
+function autoConnect(minted) {
+  document.getElementById("workspace-id").value = minted.workspace_id;
+  document.getElementById("company-id").value = minted.company_id;
+  document.getElementById("token").value = minted.token;
+  document.getElementById("connect-form").requestSubmit();
+}

@@ -57,3 +57,5 @@ header h1 { font-size: 1rem; margin: 0; color: var(--accent); }
 #run-form input { flex: 1; background: var(--panel); color: var(--text); border: 1px solid #30363d; border-radius: 4px; padding: 0.45rem 0.6rem; }
 #run-form button { background: var(--accent); color: #08131f; border: none; border-radius: 4px; padding: 0.45rem 1rem; cursor: pointer; font-weight: 600; }
 #run-status { align-self: center; color: var(--dim); }
+
+#new-playground { background: none; border: 1px dashed var(--accent); color: var(--accent); border-radius: 4px; padding: 0.3rem 0.8rem; cursor: pointer; white-space: nowrap; }

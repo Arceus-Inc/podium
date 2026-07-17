@@ -17,6 +17,7 @@ from podium.conductor._host import build_conductor
 from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
 from podium.dashboard import router as dashboard_router
+from podium.dev import router as dev_router
 from podium.db import make_engine, make_sessionmaker
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
@@ -52,6 +53,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.control_provider = ControlPlaneProvider(
         engine_dsn=settings.resolved_engine_ledger_dsn()
     )
+    if settings.dev_bootstrap:  # the privileged playground-minting door — dev stacks only
+        bootstrap_url = settings.conductor_control_database_url or settings.database_url
+        bootstrap_engine = make_engine(bootstrap_url)
+        app.state.bootstrap_engine = bootstrap_engine
+        app.state.bootstrap_sessionmaker = make_sessionmaker(bootstrap_engine)
     structlog.get_logger("podium").info(
         "log_store_ready",
         log_dir=str(settings.log_dir),
@@ -115,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(control_router)
     app.include_router(dashboard_router)
+    app.include_router(dev_router)
     return app
 
 
