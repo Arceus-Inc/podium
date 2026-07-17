@@ -69,3 +69,26 @@ shared-FS caveat as /logs; fine dev-embedded, read-mirror later).
 
 CK1 this doc · CK2 company→cockpit move + app scaffold · CK3 snapshot API (incl. semantic atoms)
 · CK4 UI shell + sections · CK5 live architecture map + delegation flow · CK6 browser-verified.
+
+## 6. The company OS loop (CO1–CO3, feat/company-os)
+
+The T2 formation example productized — "I give an idea; the CEO does most of the thing; at
+critical decisions my approval is asked":
+
+- **CO1 formation runs**: `execution_mode: "formation"` routes the directive to a real CEO
+  employee (Casey, hired idempotently beside Ace). Her harness carries the ledger-bound
+  `workforce_catalog_read` / `workforce_plan_propose` tools; invalid drafts are refused typed
+  (the engine names the hireable professions). The conductor now runs the always-on chorus
+  heartbeat (`org.start()` at ensure, `stop()` at aclose) — `PODIUM_CONDUCTOR_MAX_TICKS=0`
+  means the executor watches forever: **infinite pulses**, the company keeps running.
+- **CO2 the human boundary**: `GET /plans`, `POST /plans/{id}/approve|reject` — pure delegation
+  to chorus's `WorkforcePlanService`; `decided_by` is the authenticated actor. Approve
+  materializes employees + bounded management grants + budgets atomically, audited; reject
+  leaves the workforce untouched.
+- **CO3 the inbox**: the Delegation section shows pending plan cards (roster, budgets,
+  confidence) with Approve/Reject; the "Human approve or revise" whiteboard node glows with a
+  waiting count; the dock has a Formation toggle; the nav pill flags pending decisions.
+
+Growth path (not yet built): generic approval gates (`GovernanceFacade.approvals()` inbox for
+hire/board/plan gates), staffing-request amendments mid-delivery, and horizon proposal
+approval — same doors pattern, same inbox UI.
