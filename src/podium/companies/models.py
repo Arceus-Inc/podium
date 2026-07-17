@@ -35,7 +35,6 @@ class Company(Base):
     state: Mapped[str] = mapped_column(
         String, default="provisioning"
     )  # provisioning|idle|running|stopped
-    ledger_backend: Mapped[str] = mapped_column(String, default="sqlite")  # sqlite|postgres (M5)
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 

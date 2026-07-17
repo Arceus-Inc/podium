@@ -22,7 +22,6 @@ async def create_company(
     slug: str,
     name: str,
     config: dict[str, Any] | None = None,
-    ledger_backend: str = "sqlite",
     owner_user_id: uuid.UUID | None = None,
 ) -> Company:
     company = Company(
@@ -31,7 +30,6 @@ async def create_company(
         slug=slug,
         name=name,
         config=config or {},
-        ledger_backend=ledger_backend,
     )
     session.add(company)
     await session.flush()  # surface constraint/RLS violations within the caller's transaction

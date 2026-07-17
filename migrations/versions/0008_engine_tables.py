@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from chorus.ledger.postgres import baseline, ledger_table_names
+from chorus.ledger import baseline, ledger_table_names
 
 revision: str = "0008_engine_tables"
 down_revision: str | None = "0007_runs_engine_task_id"

@@ -27,14 +27,10 @@ def _pg_conninfo(database_url: str, *, user: str) -> str:
     return database_url.replace("+asyncpg", "").replace("://postgres@", f"://{user}@")
 
 
-async def _company(
-    admin: async_sessionmaker[AsyncSession], *, backend: str
-) -> tuple[uuid.UUID, uuid.UUID]:
+async def _company(admin: async_sessionmaker[AsyncSession]) -> tuple[uuid.UUID, uuid.UUID]:
     async with admin() as s, s.begin():
         ws = await create_workspace(s, name="A", slug="a")
-        company = await create_company(
-            s, workspace_id=ws.id, slug="c", name="C", ledger_backend=backend
-        )
+        company = await create_company(s, workspace_id=ws.id, slug="c", name="C")
         assert company.state == "provisioning"  # born unprovisioned
         return ws.id, company.id
 
@@ -45,7 +41,7 @@ async def test_successful_host_flips_provisioning_to_idle(
     app_sessionmaker: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    ws_id, company_id = await _company(sessionmaker, backend="postgres")
+    ws_id, company_id = await _company(sessionmaker)
     host = CompanyGraphHost(
         **_FAKE_MODEL,
         workdir=tmp_path,
@@ -72,7 +68,7 @@ async def test_failed_host_leaves_the_company_provisioning(
     app_sessionmaker: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    ws_id, company_id = await _company(sessionmaker, backend="postgres")
+    ws_id, company_id = await _company(sessionmaker)
     host = CompanyGraphHost(
         **_FAKE_MODEL,
         workdir=tmp_path,

@@ -3,7 +3,7 @@
 Migration 0008 creates the engine tables (chorus's own Postgres-native DDL — uuid/timestamptz/
 jsonb/boolean) in the shared database and grants the runtime role exactly those tables. A company
 graph built with `ledger_dsn` runs chorus against them, scoped to its company; the SQLite path
-stays for `ledger_backend="sqlite"` companies until the default flips.
+is Postgres-only — SQLite is retired.
 """
 
 from __future__ import annotations
@@ -107,16 +107,14 @@ def test_two_postgres_companies_are_isolated(database_url: str, tmp_path: Path) 
     assert hired_b.id == "ace"
 
 
-async def test_conductor_host_honours_the_ledger_backend_flag(
+async def test_conductor_host_opens_the_postgres_ledger(
     database_url: str,
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    """companies.ledger_backend is the rollout lever: postgres companies get PostgresLedger,
-    sqlite companies keep the per-company file — decided per company, inside one conductor."""
-    from chorus.ledger import SqliteLedger
-    from chorus.ledger.postgres import PostgresLedger
+    """Every company runs on the shared Postgres engine store — the flag era is over."""
+    from chorus.ledger import Ledger
 
     from podium.companies import create_company
 
@@ -128,14 +126,8 @@ async def test_conductor_host_honours_the_ledger_backend_flag(
 
     async with sessionmaker() as s, s.begin():
         ws = await create_workspace(s, name="A", slug="a")
-        pg_company = await create_company(
-            s, workspace_id=ws.id, slug="pg", name="PG", ledger_backend="postgres"
-        )
-        lite_company = await create_company(
-            s, workspace_id=ws.id, slug="lite", name="Lite", ledger_backend="sqlite"
-        )
-        ws_id, pg_id, lite_id = ws.id, pg_company.id, lite_company.id
-
+        company = await create_company(s, workspace_id=ws.id, slug="pg", name="PG")
+        ws_id, company_id = ws.id, company.id
     host = CompanyGraphHost(
         **_FAKE_MODEL,
         workdir=tmp_path,
@@ -143,22 +135,19 @@ async def test_conductor_host_honours_the_ledger_backend_flag(
         log_store=RunLogStore(tmp_path / "logs"),
         engine_ledger_dsn=_pg_conninfo(database_url, user="podium_app"),
     )
-    pg_runtime = await host.ensure(pg_id, ws_id)
-    lite_runtime = await host.ensure(lite_id, ws_id)
+    runtime = await host.ensure(company_id, ws_id)
     try:
-        assert isinstance(pg_runtime.graph.org._ledger, PostgresLedger)
-        assert isinstance(lite_runtime.graph.org._ledger, SqliteLedger)
+        assert isinstance(runtime.graph.org._ledger, Ledger)
     finally:
         await host.aclose()
 
 
-async def test_postgres_company_without_dsn_fails_loud(
+async def test_host_without_dsn_fails_loud(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
     tmp_path: Path,
 ) -> None:
-    """A postgres-flagged company on a host built without engine_ledger_dsn is a deployment
-    error — it must raise, never silently downgrade the engine state to a local SQLite file."""
+    """A host built without engine_ledger_dsn is a deployment error — it must raise."""
     from podium.companies import create_company
     from podium.conductor._chorus_executor import CompanyGraphHost
     from podium.logs import RunLogStore
@@ -166,9 +155,7 @@ async def test_postgres_company_without_dsn_fails_loud(
 
     async with sessionmaker() as s, s.begin():
         ws = await create_workspace(s, name="A", slug="a")
-        company = await create_company(
-            s, workspace_id=ws.id, slug="pg", name="PG", ledger_backend="postgres"
-        )
+        company = await create_company(s, workspace_id=ws.id, slug="pg", name="PG")
         ws_id, company_id = ws.id, company.id
     host = CompanyGraphHost(
         **_FAKE_MODEL,
@@ -176,7 +163,7 @@ async def test_postgres_company_without_dsn_fails_loud(
         app_sessionmaker=app_sessionmaker,
         log_store=RunLogStore(tmp_path / "logs"),
     )
-    with pytest.raises(RuntimeError, match="refusing to downgrade"):
+    with pytest.raises(ValueError, match="ledger_dsn is required"):
         await host.ensure(company_id, ws_id)
     await host.aclose()
 

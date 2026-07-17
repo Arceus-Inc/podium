@@ -16,8 +16,7 @@ from pathlib import Path
 import dream
 from chorus.adapters import CapacityAdapter, DelegatedIntakeAdapter
 from chorus.facade import Caps, Chorus
-from chorus.ledger import Ledger, SqliteLedger
-from chorus.ledger.postgres import PostgresLedger
+from chorus.ledger import Ledger
 from chorus.roles import RolePlugin, RoleRegistry, default_roles
 from chorus_employee import default_landers
 from chorus_harness import EmployeeHarnessFactory
@@ -43,9 +42,9 @@ class CompanyConfig:
     beat_timeout_s: float = 600.0
     max_concurrent_runs: int = 3
     default_assignee: str | None = None
-    # M5: when set, the ledger is chorus's PostgresLedger on this DSN, scoped to `company_id` by
-    # FORCE RLS (company_id must be canonical uuid text). None -> the SQLite file under workdir.
-    ledger_dsn: str | None = None
+    # The engine store: chorus's Postgres ledger on this DSN, scoped to `company_id` by FORCE RLS
+    # (company_id must be canonical uuid text). SQLite is retired — a DSN is always required.
+    ledger_dsn: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,18 +59,18 @@ class CompanyGraph:
 
 
 def _open_ledger(config: CompanyConfig) -> Ledger:
-    """One ledger per company: Postgres (shared DB, RLS-scoped) when `ledger_dsn` is set."""
-    if config.ledger_dsn is None:
-        return SqliteLedger.open(str(config.workdir / "ledger.db"))
+    """One Postgres ledger per company, RLS-scoped (SQLite is retired)."""
+    if not config.ledger_dsn:
+        raise ValueError("ledger_dsn is required — the engine store is Postgres-only")
     try:
         uuid.UUID(config.company_id)
     except ValueError as exc:
         # The RLS policies cast the session GUC to uuid — fail here, at build, not mid-query.
         raise ValueError(
-            f"company_id must be canonical uuid text for a Postgres ledger, "
+            f"company_id must be canonical uuid text for the Postgres ledger, "
             f"got {config.company_id!r}"
         ) from exc
-    return PostgresLedger.open(config.ledger_dsn, company_id=config.company_id)
+    return Ledger.open(config.ledger_dsn, company_id=config.company_id)
 
 
 def build(config: CompanyConfig) -> CompanyGraph:

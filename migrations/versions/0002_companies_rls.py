@@ -44,7 +44,6 @@ def upgrade() -> None:
         sa.Column("slug", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("state", sa.String(), nullable=False),
-        sa.Column("ledger_backend", sa.String(), nullable=False),
         sa.Column("config", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_companies")),

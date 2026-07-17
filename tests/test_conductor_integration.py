@@ -44,9 +44,7 @@ def _azure_creds() -> tuple[str, str, str] | None:
     return key, base, deployment
 
 
-@pytest.mark.parametrize("ledger_backend", ["sqlite", "postgres"])
 async def test_real_run_reaches_a_terminal_status(
-    ledger_backend: str,
     database_url: str,
     tmp_path: Path,
     sessionmaker: async_sessionmaker[AsyncSession],
@@ -59,9 +57,7 @@ async def test_real_run_reaches_a_terminal_status(
 
     async with sessionmaker() as s, s.begin():
         ws = await create_workspace(s, name="Integration", slug="integ")
-        company = await create_company(
-            s, workspace_id=ws.id, slug="acme", name="Acme", ledger_backend=ledger_backend
-        )
+        company = await create_company(s, workspace_id=ws.id, slug="acme", name="Acme")
         ws_id, company_id = ws.id, company.id
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run, _ = await create_run(

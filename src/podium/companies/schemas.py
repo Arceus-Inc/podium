@@ -24,7 +24,6 @@ class CompanyOut(BaseModel):
     slug: str
     name: str
     state: str
-    ledger_backend: str
     created_at: datetime
     # `config` is intentionally NOT exposed: it may hold per-company signing-key derivation inputs
     # and other internal material. Never echo it over the API.

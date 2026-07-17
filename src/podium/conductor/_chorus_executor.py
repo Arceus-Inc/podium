@@ -22,7 +22,7 @@ from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from company import CompanyConfig, CompanyGraph, build
-from podium.companies import get_company, mark_company_idle
+from podium.companies import mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
@@ -68,24 +68,6 @@ class CompanyGraphHost:
         self._engine_ledger_dsn = engine_ledger_dsn
         self._runtimes: dict[uuid.UUID, _CompanyRuntime] = {}
 
-    async def _ledger_dsn_for(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> str | None:
-        """The engine-ledger DSN for a company, per its `ledger_backend` flag (M5 rollout lever).
-
-        Read on cache miss only: flipping a live company's backend takes effect on the next
-        conductor restart (the cached runtime keeps its ledger). A postgres-flagged company with no
-        DSN configured is a deployment error and raises — never a silent SQLite downgrade.
-        """
-        async with tenant_session(self._app_sm, workspace_id) as session:
-            company = await get_company(session, company_id)
-        if company is None or company.ledger_backend != "postgres":
-            return None
-        if not self._engine_ledger_dsn:
-            raise RuntimeError(
-                f"company {company_id} has ledger_backend='postgres' but the host was built "
-                "without engine_ledger_dsn — refusing to downgrade its engine state to SQLite"
-            )
-        return self._engine_ledger_dsn
-
     async def ensure(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> _CompanyRuntime:
         existing = self._runtimes.get(company_id)
         if existing is not None:
@@ -97,7 +79,7 @@ class CompanyGraphHost:
                 deployment=self._deployment,
                 workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
                 company_id=str(company_id),
-                ledger_dsn=await self._ledger_dsn_for(company_id, workspace_id),
+                ledger_dsn=self._engine_ledger_dsn,
             )
         )
         # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
