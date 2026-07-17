@@ -34,4 +34,5 @@ class RunExecutor(Protocol):
         company_id: uuid.UUID,
         directive: str,
         is_canceled: CancelCheck,
+        params: dict[str, Any] | None = None,
     ) -> ExecutionResult: ...

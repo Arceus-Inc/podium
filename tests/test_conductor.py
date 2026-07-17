@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from podium.companies import create_company
 from podium.conductor import Conductor, ExecutionResult
 from podium.db import tenant_session
@@ -43,6 +44,7 @@ class _FakeExecutor:
         company_id: str,
         directive: str,
         is_canceled: CancelCheck,
+        params=None,
     ) -> ExecutionResult:
         if self._on_execute is not None:
             await self._on_execute()
@@ -192,3 +194,33 @@ async def test_dispatches_a_whole_batch(
         for run_id in run_ids:
             run = await get_run(s, run_id)
             assert run is not None and run.status == RunStatus.SUCCEEDED
+
+
+def test_submit_kwargs_maps_delegation_params() -> None:
+    """CP-3: the pure param→submit mapping (delivery default vs delegation discriminated)."""
+    from chorus.ledger import ExecutionMode
+
+    from podium.conductor._chorus_executor import _submit_kwargs
+
+    assert _submit_kwargs({}, default_assignee="ace") == {"assignee": "ace"}
+    assert _submit_kwargs({"execution_mode": "delivery"}, default_assignee="ace") == {
+        "assignee": "ace"
+    }
+
+    kwargs = _submit_kwargs(
+        {
+            "execution_mode": "delegation",
+            "lead": "lea",
+            "goal_id": "g1",
+            "max_team_size": 3,
+            "spend_limit_cents": 5000,
+        },
+        default_assignee="ace",
+    )
+    assert kwargs == {
+        "assignee": "lea",
+        "execution_mode": ExecutionMode.DELEGATION,
+        "goal_id": "g1",
+        "delegation_max_team_size": 3,
+        "delegation_spend_limit_cents": 5000,
+    }
