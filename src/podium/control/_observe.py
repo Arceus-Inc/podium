@@ -36,6 +36,26 @@ class SkillSummary(BaseModel):
     revision_no: int
 
 
+class OrgReport(BaseModel):
+    """The inspector's combined manager+leaf rollup — flat counts for allocation decisions."""
+
+    model_config = ConfigDict(frozen=True)
+
+    employees: int
+    managers: int
+    leaves: int
+    tasks_total: int
+    tasks_done: int
+    tasks_blocked: int
+    running_beats: int
+    failed_runs: int
+    completion_rate: float
+    decomposition_count: int
+    assignment_count: int
+    reassignment_count: int
+    dependency_edges: int
+
+
 class SpendRow(BaseModel):
     """One aggregate of the priced spend ledger (chorus cost_event — the source of truth)."""
 
@@ -69,6 +89,25 @@ class ObserveFacade:
         """Company-lifetime spend from the priced ledger."""
         return sum(group.cost_cents for group in self._ledger.cost_events.grouped("model"))
 
+    def report(self) -> OrgReport:
+        """The org rollup from the engine's own projection (manager packets stay engine-side)."""
+        rollup = LedgerInspector(self._ledger).org_report()
+        return OrgReport(
+            employees=rollup.employees,
+            managers=rollup.managers,
+            leaves=rollup.leaves,
+            tasks_total=rollup.tasks_total,
+            tasks_done=rollup.tasks_done,
+            tasks_blocked=rollup.tasks_blocked,
+            running_beats=rollup.running_beats,
+            failed_runs=rollup.failed_runs,
+            completion_rate=rollup.completion_rate,
+            decomposition_count=rollup.decomposition_count,
+            assignment_count=rollup.assignment_count,
+            reassignment_count=rollup.reassignment_count,
+            dependency_edges=rollup.dependency_edges,
+        )
+
     def costs(self, by: str) -> list[SpendRow]:
         """Spend grouped by the engine's own aggregate (model | employee | day)."""
         return [
@@ -97,4 +136,4 @@ class ObserveFacade:
         ]
 
 
-__all__ = ["CompanyStatus", "ObserveFacade", "SkillSummary", "SpendRow"]
+__all__ = ["CompanyStatus", "ObserveFacade", "OrgReport", "SkillSummary", "SpendRow"]

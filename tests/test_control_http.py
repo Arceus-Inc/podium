@@ -485,3 +485,34 @@ async def test_overview_combines_product_and_engine_truth(
     assert body["employees"] == 1
     assert body["spend_cents"] == 250
     assert body["running_beats"] == 0
+
+
+async def test_report_door_serves_the_org_rollup(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /report — the inspector's combined manager+leaf rollup, flat counts only."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Task
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="rp")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.tasks.submit(Task(id=mint_id(), intent="one open task"))
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/report",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["employees"] == 1
+    assert body["tasks_total"] == 1
+    assert body["tasks_done"] == 0
+    assert 0.0 <= body["completion_rate"] <= 1.0
