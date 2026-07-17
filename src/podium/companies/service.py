@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.companies.models import Company
@@ -36,6 +36,18 @@ async def create_company(
     session.add(company)
     await session.flush()  # surface constraint/RLS violations within the caller's transaction
     return company
+
+
+async def mark_company_idle(session: AsyncSession, company_id: uuid.UUID) -> bool:
+    """The provisioning saga's happy edge: provisioning -> idle, guarded so a retry is a no-op and
+    a later state (running/stopped) is never resurrected. True iff this call made the flip."""
+    stmt = (
+        update(Company)
+        .where(Company.id == company_id, Company.state == "provisioning")
+        .values(state="idle")
+        .returning(Company.id)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
 
 
 def company_visible(company: Company, *, user_id: uuid.UUID | None) -> bool:

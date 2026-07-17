@@ -22,7 +22,7 @@ from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from company import CompanyConfig, CompanyGraph, build
-from podium.companies import get_company
+from podium.companies import get_company, mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
@@ -104,6 +104,10 @@ class CompanyGraphHost:
         ingest.start()
         runtime = _CompanyRuntime(graph=graph, assignee=worker.name, mirror=mirror, ingest=ingest)
         self._runtimes[company_id] = runtime
+        # The provisioning saga's happy edge: the graph built and the engine store is live, so the
+        # company leaves `provisioning`. A failure above leaves it there — retried on next ensure.
+        async with tenant_session(self._app_sm, workspace_id) as session:
+            await mark_company_idle(session, company_id)
         return runtime
 
     async def attach_run(

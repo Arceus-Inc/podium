@@ -8,6 +8,14 @@ from podium.companies.service import (
     create_company,
     get_company,
     list_companies,
+    mark_company_idle,
 )
 
-__all__ = ["Company", "company_visible", "create_company", "get_company", "list_companies"]
+__all__ = [
+    "Company",
+    "company_visible",
+    "create_company",
+    "get_company",
+    "list_companies",
+    "mark_company_idle",
+]
