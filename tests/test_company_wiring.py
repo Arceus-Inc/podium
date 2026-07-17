@@ -21,9 +21,7 @@ def _config(tmp_path: Path, database_url: str) -> CompanyConfig:
         deployment="gpt-test",
         workdir=tmp_path,
         company_id=str(uuid4()),
-        ledger_dsn=database_url.replace("+asyncpg", "").replace(
-            "://postgres@", "://podium_app@"
-        ),
+        ledger_dsn=database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@"),
     )
 
 
@@ -63,7 +61,9 @@ def test_horizon_ports_are_bound_to_chorus_adapters(tmp_path: Path, database_url
     assert graph.horizon._capacity is not None
 
 
-def test_ceo_factory_carries_governance_and_the_shared_ledger(tmp_path: Path, database_url: str) -> None:
+def test_ceo_factory_carries_governance_and_the_shared_ledger(
+    tmp_path: Path, database_url: str
+) -> None:
     graph = build(_config(tmp_path, database_url))
 
     assert graph.ceo_factory._governance is graph.governance

@@ -74,13 +74,18 @@ class EventIngest:
         while True:
             event = await self._queue.get()
             try:
-                task_id = event.task_id
-                if task_id is not None and self._resolve_root is not None:
-                    task_id = self._resolve_root(task_id) or task_id
+                trace_id = event.trace_id
+                if (
+                    trace_id is None
+                    and event.task_id is not None
+                    and self._resolve_root is not None
+                ):
+                    trace_id = self._resolve_root(event.task_id)  # pre-spine emitter fallback
                 await self._mirror.record(
                     type=event.kind.value,
                     payload=dict(event.payload),
-                    task_id=task_id,
+                    task_id=event.task_id,
+                    trace_id=trace_id,
                     employee_id=event.employee_id,
                     at=event.at,
                 )

@@ -16,7 +16,9 @@ class EventOut(BaseModel):
     run_id: uuid.UUID | None
     company_id: uuid.UUID
     type: str
-    employee_id: str | None  # chorus-minted id (engine context) — text until the M5.2 engine port
+    trace_id: uuid.UUID | None  # engine lineage root — the lane's causal anchor (OBS P2)
+    task_id: str | None  # the beat's own task within the trace
+    employee_id: str | None  # employee slug — the actor lane key
     payload: dict[str, Any]
     created_at: datetime
 
