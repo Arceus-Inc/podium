@@ -21,7 +21,13 @@ from podium.companies.service import get_company
 from podium.control._allocation import AllocationBoard
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
-from podium.control._observe import CompanyStatus, OrgReport, SkillSummary, SpendRow
+from podium.control._observe import (
+    ArtifactSummary,
+    CompanyStatus,
+    OrgReport,
+    SkillSummary,
+    SpendRow,
+)
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
 from podium.control._workforce import (
     DuplicateEmployee,
@@ -377,4 +383,40 @@ async def report(
         workspace_id=workspace_id,
         company_id=company_id,
         read=lambda plane: plane.observe.report(),
+    )
+
+
+@router.get("/artifacts", response_model=list[ArtifactSummary])
+async def artifacts(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    limit: int = 50,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[ArtifactSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    bounded = max(1, min(limit, 200))  # a page, never the firehose
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.artifacts(limit=bounded),
+    )
+
+
+@router.get("/export")
+async def export_workforce(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> dict[str, object]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.workforce.export_bundle(),
     )

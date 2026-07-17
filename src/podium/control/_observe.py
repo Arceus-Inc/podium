@@ -56,6 +56,19 @@ class OrgReport(BaseModel):
     dependency_edges: int
 
 
+class ArtifactSummary(BaseModel):
+    """One landed outcome — the product shape of an engine artifact."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    task_id: str
+    type: str  # engine ArtifactType value: pr|doc|finding|…
+    url: str | None
+    review_state: str | None
+    is_primary: bool
+
+
 class SpendRow(BaseModel):
     """One aggregate of the priced spend ledger (chorus cost_event — the source of truth)."""
 
@@ -88,6 +101,20 @@ class ObserveFacade:
     def spend_total_cents(self) -> int:
         """Company-lifetime spend from the priced ledger."""
         return sum(group.cost_cents for group in self._ledger.cost_events.grouped("model"))
+
+    def artifacts(self, *, limit: int) -> list[ArtifactSummary]:
+        """The landed-outcomes index, newest first, bounded."""
+        return [
+            ArtifactSummary(
+                id=artifact.id,
+                task_id=artifact.task_id,
+                type=artifact.type.value,
+                url=artifact.url,
+                review_state=artifact.review_state,
+                is_primary=artifact.is_primary,
+            )
+            for artifact in self._ledger.artifacts.list_recent(limit=limit)
+        ]
 
     def report(self) -> OrgReport:
         """The org rollup from the engine's own projection (manager packets stay engine-side)."""
@@ -136,4 +163,11 @@ class ObserveFacade:
         ]
 
 
-__all__ = ["CompanyStatus", "ObserveFacade", "OrgReport", "SkillSummary", "SpendRow"]
+__all__ = [
+    "ArtifactSummary",
+    "CompanyStatus",
+    "ObserveFacade",
+    "OrgReport",
+    "SkillSummary",
+    "SpendRow",
+]

@@ -516,3 +516,71 @@ async def test_report_door_serves_the_org_rollup(
     assert body["tasks_total"] == 1
     assert body["tasks_done"] == 0
     assert 0.0 <= body["completion_rate"] <= 1.0
+
+
+async def test_artifacts_index_door(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4 tail: the landed-outcomes index, newest first, bounded."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Artifact, ArtifactType, Ledger, Task
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="ai")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        task_id = mint_id()
+        ledger.tasks.submit(Task(id=task_id, intent="ship", assignee_employee_id="ada"))
+        ledger.artifacts.create(
+            Artifact(id=mint_id(), task_id=task_id, type=ArtifactType.PR, url="https://pr/1")
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/artifacts?limit=10",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["type"] == "pr"
+    assert rows[0]["url"] == "https://pr/1"
+    assert rows[0]["task_id"] == task_id
+
+
+async def test_workforce_export_door(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4 tail: the portable workforce bundle — same fields the git codec's role.md carries."""
+    from chorus.ledger import Ledger
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="ex")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="lea", name="Lea", role="pm"))
+        ledger.employees.create(
+            Employee(id="ada", name="Ada", role="backend_engineer", reports_to="lea")
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/export",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    bundle = response.json()
+    assert bundle["format"] == "workforce/v1"
+    by_id = {m["id"]: m for m in bundle["employees"]}
+    assert set(by_id) == {"lea", "ada"}
+    assert by_id["ada"]["reports_to"] == "lea"
+    assert by_id["ada"]["role"] == "backend_engineer"

@@ -82,6 +82,27 @@ class WorkforceFacade:
             raise UnknownEmployeeError(employee_id)
         self._org().terminate(employee_id)
 
+    def export_bundle(self) -> dict[str, object]:
+        """The portable workforce (spec 09 §3 fields) as one JSON bundle.
+
+        ponytail: synchronous — a workforce is tens of rows; the 202-async job is the growth
+        path when orgs outgrow one response body.
+        """
+        return {
+            "format": "workforce/v1",
+            "employees": [
+                {
+                    "id": employee.id,
+                    "name": employee.name,
+                    "role": employee.role,
+                    "reports_to": employee.reports_to,
+                    "memory_scope": employee.memory_scope,
+                    "status": employee.status.value,
+                }
+                for employee in self._ledger.employees.list()
+            ],
+        }
+
     def roster(self) -> list[EmployeeView]:
         """Every employee of the company, engine order."""
         return [
