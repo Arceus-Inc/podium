@@ -83,12 +83,66 @@ def _conductor(
     )
 
 
+async def _dispatch_and_drain(conductor: Conductor) -> int:
+    claimed = await conductor.dispatch_once()
+    await conductor.drain()
+    return claimed
+
+
+async def test_long_run_no_longer_starves_later_queued_runs(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Live 2026-07-18: a long delegation run held dispatch_once's gather open, so every
+    later run stayed queued until it finished. Claiming must spawn execution in the
+    background and keep polling."""
+    import asyncio
+
+    gate = asyncio.Event()
+
+    class _GatedExecutor(_FakeExecutor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def execute(self, **kwargs: object) -> ExecutionResult:
+            self.calls += 1
+            if self.calls == 1:
+                await gate.wait()  # the "30-minute" delegation run
+            return ExecutionResult(status=RunStatus.SUCCEEDED)
+
+    ws_id, first_run = await _queue_a_run(sessionmaker, app_sessionmaker)
+    conductor = _conductor(sessionmaker, app_sessionmaker, _GatedExecutor())
+    assert await conductor.dispatch_once() == 1  # claims + spawns; must NOT block on the gate
+
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        second, _ = await create_run(
+            s,
+            workspace_id=ws_id,
+            company_id=(await get_run(s, first_run)).company_id,
+            directive="later run",
+            idempotency_key="k2",
+        )
+    assert await conductor.dispatch_once() == 1  # the later run is claimed while #1 still runs
+    await asyncio.sleep(0.05)  # let the unblocked second task finish
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        assert (await get_run(s, second.id)).status == RunStatus.SUCCEEDED
+        assert (await get_run(s, first_run)).status == RunStatus.RUNNING  # still in flight
+
+    gate.set()
+    await conductor.drain()
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        assert (await get_run(s, first_run)).status == RunStatus.SUCCEEDED
+
+
 async def test_dispatches_queued_run_to_success(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
     ws_id, run_id = await _queue_a_run(sessionmaker, app_sessionmaker)
-    dispatched = await _conductor(sessionmaker, app_sessionmaker, _FakeExecutor()).dispatch_once()
+    dispatched = await _dispatch_and_drain(
+        _conductor(sessionmaker, app_sessionmaker, _FakeExecutor())
+    )
     assert dispatched == 1
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run = await get_run(s, run_id)
@@ -103,7 +157,7 @@ async def test_records_failure_from_executor(
 ) -> None:
     ws_id, run_id = await _queue_a_run(sessionmaker, app_sessionmaker)
     executor = _FakeExecutor(result=ExecutionResult(status=RunStatus.FAILED, error="boom"))
-    await _conductor(sessionmaker, app_sessionmaker, executor).dispatch_once()
+    await _dispatch_and_drain(_conductor(sessionmaker, app_sessionmaker, executor))
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run = await get_run(s, run_id)
     assert run is not None
@@ -117,7 +171,7 @@ async def test_executor_exception_becomes_failed(
 ) -> None:
     ws_id, run_id = await _queue_a_run(sessionmaker, app_sessionmaker)
     executor = _FakeExecutor(raises=RuntimeError("kaboom"))
-    await _conductor(sessionmaker, app_sessionmaker, executor).dispatch_once()
+    await _dispatch_and_drain(_conductor(sessionmaker, app_sessionmaker, executor))
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run = await get_run(s, run_id)
     assert run is not None
@@ -136,7 +190,7 @@ async def test_honors_cancel_requested_mid_run(
             await request_cancel(s, run_id)
 
     executor = _FakeExecutor(on_execute=flip_to_canceling, honor_cancel=True)
-    await _conductor(sessionmaker, app_sessionmaker, executor).dispatch_once()
+    await _dispatch_and_drain(_conductor(sessionmaker, app_sessionmaker, executor))
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run = await get_run(s, run_id)
     assert run is not None
@@ -152,7 +206,7 @@ async def test_reclaims_expired_lease_then_redispatches(
     async with tenant_session(app_sessionmaker, ws_id) as s:
         await claim_queued_run(s, run_id, owner="dead-worker", lease_seconds=-100)
 
-    await _conductor(sessionmaker, app_sessionmaker, _FakeExecutor()).dispatch_once()
+    await _dispatch_and_drain(_conductor(sessionmaker, app_sessionmaker, _FakeExecutor()))
     async with tenant_session(app_sessionmaker, ws_id) as s:
         run = await get_run(s, run_id)
     assert run is not None
@@ -168,8 +222,8 @@ async def test_second_dispatch_finds_no_work(
 ) -> None:
     await _queue_a_run(sessionmaker, app_sessionmaker)
     conductor = _conductor(sessionmaker, app_sessionmaker, _FakeExecutor())
-    assert await conductor.dispatch_once() == 1
-    assert await conductor.dispatch_once() == 0  # nothing left queued
+    assert await _dispatch_and_drain(conductor) == 1
+    assert await _dispatch_and_drain(conductor) == 0  # nothing left queued
 
 
 async def test_dispatches_a_whole_batch(
@@ -189,7 +243,9 @@ async def test_dispatches_a_whole_batch(
             )
             run_ids.append(run.id)
 
-    assert await _conductor(sessionmaker, app_sessionmaker, _FakeExecutor()).dispatch_once() == 3
+    assert (
+        await _dispatch_and_drain(_conductor(sessionmaker, app_sessionmaker, _FakeExecutor())) == 3
+    )
     async with tenant_session(app_sessionmaker, ws_id) as s:
         for run_id in run_ids:
             run = await get_run(s, run_id)
