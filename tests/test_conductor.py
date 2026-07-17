@@ -224,3 +224,17 @@ def test_submit_kwargs_maps_delegation_params() -> None:
         "delegation_max_team_size": 3,
         "delegation_spend_limit_cents": 5000,
     }
+
+
+def test_executor_max_ticks_comes_from_settings() -> None:
+    """Live e2e finding: a real directive became an engine marathon and outlived the hardcoded
+    60-tick budget. The budget is an operational knob, not a constant."""
+    from podium.conductor._host import build_conductor
+    from podium.settings import Settings
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://postgres@localhost:1/x",
+        conductor_max_ticks=240,
+    )
+    conductor, _close = build_conductor(settings)
+    assert conductor._executor._max_ticks == 240
