@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>podium — company cockpit</title>
+  <link rel="stylesheet" href="/dashboard/style.css" />
+</head>
+<body>
+  <header>
+    <h1>podium</h1>
+    <form id="connect-form">
+      <input id="workspace-id" placeholder="workspace id" required />
+      <input id="company-id" placeholder="company id" required />
+      <input id="token" placeholder="API token" type="password" required />
+      <button type="submit">Connect</button>
+      <span id="connection-status" data-state="idle">idle</span>
+    </form>
+  </header>
+
+  <nav id="tabs">
+    <button data-tab="org" class="active">Org</button>
+    <button data-tab="work">Work</button>
+    <button data-tab="runs">Runs</button>
+    <button data-tab="costs">Costs</button>
+    <button data-tab="ops">Ops</button>
+  </nav>
+
+  <main>
+    <section id="tab-org" class="tab active">
+      <div id="lanes"></div><!-- one live lane per employee (OBS P1) -->
+    </section>
+    <section id="tab-work" class="tab">
+      <div class="board">
+        <div><h2>Queued</h2><ul id="queued"></ul></div>
+        <div><h2>Running</h2><ul id="running"></ul></div>
+        <div><h2>Blocked</h2><ul id="blocked"></ul></div>
+      </div>
+    </section>
+    <section id="tab-runs" class="tab">
+      <input id="run-id" placeholder="run id" />
+      <button id="load-run">Load trace</button>
+      <ol id="run-trace"></ol>
+    </section>
+    <section id="tab-costs" class="tab">
+      <select id="costs-by">
+        <option value="day">by day</option>
+        <option value="model">by model</option>
+        <option value="employee">by employee</option>
+      </select>
+      <table id="costs-table"><tbody></tbody></table>
+    </section>
+    <section id="tab-ops" class="tab">
+      <h2>Stalled</h2><ul id="stalled"></ul>
+      <h2>Raw tail</h2><ol id="raw-tail"></ol>
+    </section>
+  </main>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

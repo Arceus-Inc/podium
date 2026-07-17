@@ -16,6 +16,7 @@ from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
 from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
+from podium.dashboard import router as dashboard_router
 from podium.db import make_engine, make_sessionmaker
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
@@ -101,6 +102,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(events_router)
     app.include_router(control_router)
+    app.include_router(dashboard_router)
     return app
 
 
