@@ -11,19 +11,22 @@
 > migration 0008 (engine tables + grants), `CompanyConfig.ledger_dsn`, conductor `ledger_backend`
 > routing, company ownership (`owner_user_id`, §2.5), and the provisioning saga (§3.5).
 >
-> **M5-L resolved (2026-07-17): the memory/skills stores STAY SQLite, by design.** The ledger
-> needed Postgres because it is shared operational truth (multi-tenant, RLS-walled, read by
-> api + conductor + beats). Episodic memory and skills are the opposite shape: single-writer,
-> company-workdir-local files read only by that company's beat processes, riding a filesystem
-> that is already host-bound (worktrees, org repo, lattice consolidation, horizon's JSON stores)
-> — so a Postgres port dissolves no constraint the workdir still imposes. Episodic capture is
-> advisory learning telemetry (never correctness-bearing); FTS5 gives BM25 + snippets natively.
-> M4d's read-only skills/learning doors inherit the same shared-FS constraint M3c documented for
-> `/logs`, with the same later fix (read mirror). If a genuine cross-host need appears, port the
-> skills store alone (2 tables, no FTS) as a delta in `chorus.ledger.migrations` — the authored
-> Postgres migration stream (applied-set over the frozen baseline) that now handles all engine
-> schema evolution. A full port attempt exists as chorus commit `abf038e` (reverted) for reference.
-> **Also open**: object-store log mirror.
+> **M5-L resolved (2026-07-17): skills → Postgres (`0002_skills`); episodic memory STAYS SQLite,
+> by design.** The ledger needed Postgres because it is shared operational truth (multi-tenant,
+> RLS-walled, read by api + conductor + beats). Episodic memory is the opposite shape —
+> single-writer, company-workdir-local, read only by that company's beat processes, riding a
+> filesystem that is already host-bound (worktrees, org repo, lattice consolidation, horizon's
+> JSON stores) — and it is advisory learning telemetry, never correctness-bearing, with FTS5
+> BM25 + snippets native; a Postgres port dissolves no constraint the workdir still imposes.
+> The SKILLS store ported because it is the one lattice-side store where the DB is the source
+> of truth (evolved skills rematerialize from it every beat): `skill` + `skill_revision` live in
+> the shared engine schema (company_id + FORCE RLS) as `0002_skills` — the first delta in the
+> authored migration stream (applied-set over the frozen baseline). Models/repos are first-class
+> ledger citizens (`ledger.skills`, `ledger.skill_revisions`); `SkillStore(ledger)` is the domain
+> facade. podium applies pending engine deltas generically in `migrations/env.py` (owner-role
+> apply + record + exact-table grants) — a new chorus delta needs zero podium code. M4d's
+> read-only learning doors keep the shared-FS constraint only for episodic reads (same as
+> M3c `/logs`, same later fix). **Also open**: object-store log mirror.
 
 The plan staged the chorus ledger port in two milestones: **M5** = PostgresLedger, *schema-per-company*
 (zero chorus schema change); **M7** = tenant-aware *shared-schema* (`company_id` + FORCE RLS). This
