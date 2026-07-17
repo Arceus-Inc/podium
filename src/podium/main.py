@@ -14,6 +14,8 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
+from podium.control import ControlPlaneProvider
+from podium.control.router import router as control_router
 from podium.db import make_engine, make_sessionmaker
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
@@ -46,6 +48,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await broadcaster.start()
     app.state.broadcaster = broadcaster
     app.state.log_store = RunLogStore(settings.log_dir)
+    app.state.control_provider = ControlPlaneProvider(
+        engine_dsn=settings.resolved_engine_ledger_dsn()
+    )
     structlog.get_logger("podium").info(
         "log_store_ready",
         log_dir=str(settings.log_dir),
@@ -95,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(companies_router)
     app.include_router(runs_router)
     app.include_router(events_router)
+    app.include_router(control_router)
     return app
 
 
