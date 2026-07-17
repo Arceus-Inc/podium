@@ -42,6 +42,13 @@ async def test_dashboard_serves_the_shell(api: httpx.AsyncClient) -> None:
     assert css.status_code == 200
 
 
+async def test_shell_can_drive_a_run(api: httpx.AsyncClient) -> None:
+    body = (await api.get("/dashboard")).text
+    assert 'id="run-form"' in body  # the page submits runs itself, not just observes
+    js = (await api.get("/dashboard/app.js")).text
+    assert "idempotency_key" in js
+
+
 async def test_dashboard_shell_names_the_tabs(api: httpx.AsyncClient) -> None:
     body = (await api.get("/dashboard")).text
     for tab in ("Org", "Work", "Runs", "Costs", "Ops"):
