@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # marathon (decomposition + verification + follow-up intake) that outlives 60 ticks —
     # size this to how long you let one directive run before podium calls it timed_out.
     conductor_max_ticks: int = 60
+    # Dev-only: expose POST /v1/dev/bootstrap (mints workspace+company+token over the
+    # privileged control connection). NEVER enable in production.
+    dev_bootstrap: bool = False
 
     # The engine state store: every company's chorus ledger runs on this sync-psycopg DSN
     # (RLS-scoped per company under the non-superuser role). Empty → derive from database_url.
