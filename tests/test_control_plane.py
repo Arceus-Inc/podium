@@ -173,3 +173,34 @@ def test_observe_facade_reads_status_and_skills(
         assert plane.observe.skills("lea") == []  # per-employee, not company-wide
     finally:
         plane.close()
+
+
+def test_direction_facade_reads_the_goal_tree(
+    database_url: str, provider: ControlPlaneProvider
+) -> None:
+    from chorus.ids import mint_id
+    from chorus.ledger import Goal, GoalLevel, Ledger
+
+    ws_id, company_id = uuid.uuid4(), uuid.uuid4()
+    dsn = _pg_conninfo(database_url, user="podium_app")
+    root_id, child_id = mint_id(), mint_id()
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.goals.create(Goal(id=root_id, title="Win launch week"))
+        ledger.goals.create(
+            Goal(id=child_id, title="Ship the page", level=GoalLevel.TEAM, parent_id=root_id)
+        )
+    finally:
+        ledger.close()
+
+    plane = provider.read_plane(workspace_id=ws_id, company_id=company_id)
+    try:
+        tree = plane.direction.goal_tree()
+        assert len(tree) == 1  # one root
+        root = tree[0]
+        assert root.title == "Win launch week"
+        assert root.level == "company"
+        assert [child.title for child in root.children] == ["Ship the page"]
+        assert root.children[0].children == []
+    finally:
+        plane.close()

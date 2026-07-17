@@ -6,6 +6,7 @@ snapshots map onto its sub-facades 1:1; nothing past the plane sees engine inter
 """
 
 from podium.control._delegation import CapacityEntry, DelegationFacade, TeamSummary
+from podium.control._direction import DirectionFacade, GoalNode
 from podium.control._observe import CompanyStatus, ObserveFacade, SkillSummary
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
 from podium.control._workforce import EmployeeView, WorkforceFacade
@@ -16,7 +17,9 @@ __all__ = [
     "CompanyStatus",
     "ControlPlaneProvider",
     "DelegationFacade",
+    "DirectionFacade",
     "EmployeeView",
+    "GoalNode",
     "ObserveFacade",
     "SkillSummary",
     "TeamSummary",
