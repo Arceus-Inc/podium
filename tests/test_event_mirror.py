@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from podium.companies import create_company
 from podium.conductor import EventMirror
 from podium.db import tenant_session
@@ -93,3 +94,28 @@ async def test_seq_seeds_from_existing_max(
     mirror = EventMirror(app_sessionmaker, company_id=company_id, workspace_id=ws_id)
     event = await mirror.record(type="run.started", payload={}, task_id="unknown")
     assert event.seq == 6  # continues after the persisted max, not from 1
+
+
+async def test_trace_and_task_land_on_the_row_and_route_the_run(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    """CP-1: the envelope names the lane — trace_id (lineage root) routes the run even when the
+    beat's own task is a CHILD the mirror never registered; both ids land on the row."""
+    from uuid import uuid4
+
+    ws_id, company_id, run_id = await _company_with_run(sessionmaker)
+    mirror = EventMirror(app_sessionmaker, company_id=company_id, workspace_id=ws_id)
+    root, child = str(uuid4()), str(uuid4())
+    mirror.register_run(run_id=run_id, engine_task_id=root)
+
+    await mirror.record(
+        type="run.text", payload={"text": "hi"}, task_id=child, trace_id=root, employee_id="ada"
+    )
+
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        rows = await list_run_events(s, run_id, after=0, limit=10)
+    assert len(rows) == 1  # routed by trace root, not the unregistered child id
+    assert str(rows[0].trace_id) == root
+    assert rows[0].task_id == child
+    assert rows[0].employee_id == "ada"

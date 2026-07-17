@@ -10,6 +10,7 @@ from typing import Any
 from chorus.events import Event, EventKind
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from podium.companies import create_company
 from podium.conductor import EventIngest, EventMirror
 from podium.db import tenant_session
