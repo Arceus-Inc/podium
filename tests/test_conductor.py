@@ -291,6 +291,21 @@ def test_submit_kwargs_maps_delegation_params() -> None:
     }
 
 
+def test_formation_directive_carries_the_formation_contract() -> None:
+    """Live 2026-07-18: 'make an AI notetaker app' in formation mode reached the CEO raw and
+    she built the product herself. The product injects the formation contract server-side."""
+    from podium.conductor._chorus_executor import _effective_directive
+
+    wrapped = _effective_directive({"execution_mode": "formation"}, "make an AI notetaker app")
+    assert wrapped.startswith("This is a FORMATION directive")
+    assert "workforce_plan_propose" in wrapped
+    assert "max_delegation_depth >= 1" in wrapped
+    assert wrapped.endswith("## Objective\nmake an AI notetaker app")
+    # Delivery and delegation directives pass through untouched.
+    assert _effective_directive({}, "build the thing") == "build the thing"
+    assert _effective_directive({"execution_mode": "delegation"}, "deliver it") == "deliver it"
+
+
 def test_executor_max_ticks_comes_from_settings() -> None:
     """Live e2e finding: a real directive became an engine marathon and outlived the hardcoded
     60-tick budget. The budget is an operational knob, not a constant."""

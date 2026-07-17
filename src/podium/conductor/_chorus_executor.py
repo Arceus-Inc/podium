@@ -137,6 +137,27 @@ class CompanyGraphHost:
             runtime.graph.close()  # the company's live Postgres connection
 
 
+_FORMATION_CONTRACT = (
+    "This is a FORMATION directive: form the permanent organization for the objective below — "
+    "do NOT build the product yourself and do NOT write code. Call workforce_catalog_read "
+    "first, then submit exactly one complete typed workforce plan via workforce_plan_propose: "
+    "name each hire's profession from the catalog and its reporting line, and grant bounded "
+    "management authority — any lead expected to delegate work needs can_lead=true, "
+    "max_delegation_depth >= 1, and a max_team_size covering itself plus its reports. Keep "
+    "every budget allocation bounded. The plan stays pending for a human decision; never claim "
+    "anyone was hired. Then stop.\n\n## Objective\n"
+)
+
+
+def _effective_directive(params: dict[str, Any], directive: str) -> str:
+    """Formation runs carry the engine's formation contract server-side (live 2026-07-18: a
+    raw founder objective sent as-is made the CEO build the whole product personally instead
+    of proposing an org — the product owns the incantation, not the founder)."""
+    if params.get("execution_mode") == "formation":
+        return _FORMATION_CONTRACT + directive
+    return directive
+
+
 def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -> dict[str, Any]:
     """Map durable run params onto org.submit kwargs — one run resource, mode discriminates."""
     mode = params.get("execution_mode")
@@ -201,7 +222,7 @@ class ChorusRunExecutor:
 
         runtime = await self._host.ensure(company_id, workspace_id)
         task = runtime.graph.org.submit(
-            directive,
+            _effective_directive(params or {}, directive),
             **_submit_kwargs(params or {}, default_assignee=runtime.assignee, ceo=runtime.ceo),
         )
         await self._host.attach_run(
