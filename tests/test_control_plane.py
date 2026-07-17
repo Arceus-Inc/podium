@@ -87,3 +87,89 @@ def test_read_planes_are_company_isolated(
         assert plane_b.workforce.roster() == []
     finally:
         plane_b.close()
+
+
+def _seed_work(dsn: str, company_id: uuid.UUID) -> None:
+    """A task + a team + a skill — the cold state the CK2 facades read."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Task, Team, TeamMember, TeamMembershipRole
+    from chorus.skills import SkillOrigin, SkillStore
+    from chorus.workforce import Employee
+
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.employees.create(Employee(id="lea", name="Lea", role="pm"))
+        ledger.tasks.submit(Task(id=mint_id(), intent="ship the launch page"))
+        team_id = mint_id()
+        ledger.teams.create(
+            Team(id=team_id, name="launch", lead_employee_id="lea", created_by="lea")
+        )
+        ledger.team_members.add(
+            TeamMember(
+                team_id=team_id,
+                employee_id="ada",
+                source_manager_id="lea",
+                membership_role=TeamMembershipRole.MEMBER,
+            )
+        )
+        SkillStore(ledger).create(
+            employee_id="ada",
+            slug="deploy-checklist",
+            name="Deploy checklist",
+            description="how we ship",
+            when_to_use="before any deploy",
+            file_inventory=[{"path": "SKILL.md", "content": "# Deploy"}],
+            origin=SkillOrigin.CREATED,
+            action="create",
+        )
+    finally:
+        ledger.close()
+
+
+def test_delegation_facade_reads_teams_and_capacity(
+    database_url: str, provider: ControlPlaneProvider
+) -> None:
+    ws_id, company_id = uuid.uuid4(), uuid.uuid4()
+    dsn = _pg_conninfo(database_url, user="podium_app")
+    _seed_work(dsn, company_id)
+
+    plane = provider.read_plane(workspace_id=ws_id, company_id=company_id)
+    try:
+        teams = plane.delegation.teams()
+        assert len(teams) == 1
+        assert teams[0].name == "launch"
+        assert teams[0].lead == "lea"
+        assert teams[0].members == ["ada"]
+        assert teams[0].status == "forming"
+
+        capacity = {entry.role: entry for entry in plane.delegation.capacity()}
+        assert set(capacity) == {"backend_engineer", "pm"}
+        assert capacity["backend_engineer"].eligible == 1
+        assert capacity["backend_engineer"].running == 0
+    finally:
+        plane.close()
+
+
+def test_observe_facade_reads_status_and_skills(
+    database_url: str, provider: ControlPlaneProvider
+) -> None:
+    ws_id, company_id = uuid.uuid4(), uuid.uuid4()
+    dsn = _pg_conninfo(database_url, user="podium_app")
+    _seed_work(dsn, company_id)
+
+    plane = provider.read_plane(workspace_id=ws_id, company_id=company_id)
+    try:
+        status = plane.observe.status()
+        assert status.employees == 2
+        assert status.open_tasks == 1
+        assert status.running_beats == 0
+
+        skills = plane.observe.skills("ada")
+        assert [skill.slug for skill in skills] == ["deploy-checklist"]
+        assert skills[0].revision_no == 1
+        assert skills[0].origin == "created"
+
+        assert plane.observe.skills("lea") == []  # per-employee, not company-wide
+    finally:
+        plane.close()

@@ -1,0 +1,71 @@
+"""ObserveFacade — read-only telemetry: company status (LedgerInspector) + evolved skills."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from chorus.observability import LedgerInspector
+from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from chorus.ledger import Ledger
+
+
+class CompanyStatus(BaseModel):
+    """The company at a glance — counts only; drill-downs are their own views."""
+
+    model_config = ConfigDict(frozen=True)
+
+    employees: int
+    open_tasks: int
+    running_beats: int
+    blocked_tasks: int
+    open_incidents: int
+
+
+class SkillSummary(BaseModel):
+    """One evolved/created skill HEAD (the engine's procedural memory, read-only)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    slug: str
+    name: str
+    origin: str  # canonical|evolved|created
+    state: str  # active|stale|archived
+    revision_no: int
+
+
+class ObserveFacade:
+    """Pure delegation to LedgerInspector projections + the skills tables; translation only."""
+
+    def __init__(self, ledger: Ledger) -> None:
+        self._ledger = ledger
+
+    def status(self) -> CompanyStatus:
+        """Counts from the engine's own status projection (never re-derived from events)."""
+        status = LedgerInspector(self._ledger).status()
+        return CompanyStatus(
+            employees=len(status.employees),
+            open_tasks=status.open_tasks,
+            running_beats=status.running_beats,
+            blocked_tasks=len(status.blocked),
+            open_incidents=len(status.open_incidents),
+        )
+
+    def skills(self, employee_id: str) -> list[SkillSummary]:
+        """One employee's active skill HEADs (evolution is internal — this is telemetry)."""
+        return [
+            SkillSummary(
+                id=skill.id,
+                slug=skill.slug,
+                name=skill.name,
+                origin=skill.origin.value,
+                state=skill.state.value,
+                revision_no=skill.latest_revision_no,
+            )
+            for skill in self._ledger.skills.list_active(employee_id)
+        ]
+
+
+__all__ = ["CompanyStatus", "ObserveFacade", "SkillSummary"]

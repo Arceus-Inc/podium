@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 
 from chorus.ledger import Ledger
 
+from podium.control._delegation import DelegationFacade
+from podium.control._observe import ObserveFacade
 from podium.control._workforce import WorkforceFacade
 
 
@@ -32,6 +34,14 @@ class CompanyControlPlane:
     @property
     def workforce(self) -> WorkforceFacade:
         return WorkforceFacade(self._ledger)
+
+    @property
+    def delegation(self) -> DelegationFacade:
+        return DelegationFacade(self._ledger, str(self.company_id))
+
+    @property
+    def observe(self) -> ObserveFacade:
+        return ObserveFacade(self._ledger)
 
     def close(self) -> None:
         """Release the plane's engine connection."""
