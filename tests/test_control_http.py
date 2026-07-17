@@ -431,3 +431,57 @@ async def test_costs_door_aggregates_spend(
 
     bad = await api.get(f"{base}?by=provider", headers=headers)
     assert bad.status_code == 422
+
+
+async def test_overview_combines_product_and_engine_truth(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: /overview — runs by status (product DB) + workforce/tasks/spend (engine ledger)."""
+    from datetime import UTC, datetime
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.ledger._models import CostEvent
+    from chorus.workforce import Employee
+
+    from podium.db import tenant_session
+    from podium.runs import create_run
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="ov")
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        await create_run(
+            s, workspace_id=ws_id, company_id=company_id, directive="d1", idempotency_key="o1"
+        )
+        await create_run(
+            s, workspace_id=ws_id, company_id=company_id, directive="d2", idempotency_key="o2"
+        )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.cost_events.record(
+            CostEvent(
+                id=mint_id(),
+                employee_id="ada",
+                provider="dream",
+                model="gpt-x",
+                cost_cents=250,
+                occurred_at=datetime(2026, 6, 1, tzinfo=UTC),
+            )
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/overview",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["runs_by_status"] == {"queued": 2}
+    assert body["employees"] == 1
+    assert body["spend_cents"] == 250
+    assert body["running_beats"] == 0

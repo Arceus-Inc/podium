@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -230,3 +230,10 @@ async def reclaim_run(session: AsyncSession, run_id: uuid.UUID) -> bool:
         .returning(Run.id)
     )
     return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def runs_by_status(session: AsyncSession, company_id: uuid.UUID) -> dict[str, int]:
+    """Run lifecycle counts for one company (the overview's product-DB half)."""
+    stmt = select(Run.status, func.count()).where(Run.company_id == company_id).group_by(Run.status)
+    rows = (await session.execute(stmt)).all()
+    return {str(status): int(count) for status, count in rows}

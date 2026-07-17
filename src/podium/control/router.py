@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from chorus.errors import OrgInvariantViolation
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -30,6 +30,7 @@ from podium.control._workforce import (
     UnknownRole,
 )
 from podium.db import tenant_session
+from podium.runs.service import runs_by_status
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/companies/{company_id}", tags=["control"])
 
@@ -322,4 +323,41 @@ async def costs(
         workspace_id=workspace_id,
         company_id=company_id,
         read=lambda plane: plane.observe.costs(by),
+    )
+
+
+class CompanyOverview(BaseModel):
+    runs_by_status: dict[str, int]  # product DB: the run lifecycle counts
+    employees: int
+    open_tasks: int
+    running_beats: int
+    blocked_tasks: int
+    spend_cents: int
+
+
+@router.get("/overview", response_model=CompanyOverview)
+async def overview(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CompanyOverview:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        run_counts = await runs_by_status(session, company_id)
+
+    def _engine_half(plane: CompanyControlPlane) -> tuple[Any, int]:
+        return plane.observe.status(), plane.observe.spend_total_cents()
+
+    status_view, spend = await _plane_read(
+        provider, workspace_id=workspace_id, company_id=company_id, read=_engine_half
+    )
+    return CompanyOverview(
+        runs_by_status=run_counts,
+        employees=status_view.employees,
+        open_tasks=status_view.open_tasks,
+        running_beats=status_view.running_beats,
+        blocked_tasks=status_view.blocked_tasks,
+        spend_cents=spend,
     )

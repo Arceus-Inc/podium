@@ -65,6 +65,10 @@ class ObserveFacade:
             open_incidents=len(status.open_incidents),
         )
 
+    def spend_total_cents(self) -> int:
+        """Company-lifetime spend from the priced ledger."""
+        return sum(group.cost_cents for group in self._ledger.cost_events.grouped("model"))
+
     def costs(self, by: str) -> list[SpendRow]:
         """Spend grouped by the engine's own aggregate (model | employee | day)."""
         return [
