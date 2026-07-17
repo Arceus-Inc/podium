@@ -36,6 +36,7 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
         workdir=Path(settings.workdir),
         app_sessionmaker=app_sessionmaker,
         log_store=RunLogStore(Path(settings.log_dir)),
+        engine_ledger_dsn=settings.resolved_engine_ledger_dsn(),
     )
     conductor = Conductor(
         control_sessionmaker=make_sessionmaker(control_engine),

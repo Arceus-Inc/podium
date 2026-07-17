@@ -22,6 +22,7 @@ from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from company import CompanyConfig, CompanyGraph, build
+from podium.companies import get_company
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
@@ -56,6 +57,7 @@ class CompanyGraphHost:
         workdir: Path,
         app_sessionmaker: async_sessionmaker[AsyncSession],
         log_store: RunLogStore,
+        engine_ledger_dsn: str = "",
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
@@ -63,7 +65,16 @@ class CompanyGraphHost:
         self._workdir = workdir
         self._app_sm = app_sessionmaker
         self._log_store = log_store
+        self._engine_ledger_dsn = engine_ledger_dsn
         self._runtimes: dict[uuid.UUID, _CompanyRuntime] = {}
+
+    async def _ledger_dsn_for(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> str | None:
+        """The engine-ledger DSN for a company, per its `ledger_backend` flag (M5 rollout lever)."""
+        async with tenant_session(self._app_sm, workspace_id) as session:
+            company = await get_company(session, company_id)
+        if company is None or company.ledger_backend != "postgres":
+            return None
+        return self._engine_ledger_dsn or None
 
     async def ensure(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> _CompanyRuntime:
         existing = self._runtimes.get(company_id)
@@ -76,6 +87,7 @@ class CompanyGraphHost:
                 deployment=self._deployment,
                 workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
                 company_id=str(company_id),
+                ledger_dsn=await self._ledger_dsn_for(company_id, workspace_id),
             )
         )
         # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real

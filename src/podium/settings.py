@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     conductor_poll_interval: float = 5.0
     conductor_batch_size: int = 10
 
+    # M5: the engine state store. Companies with ledger_backend="postgres" run their chorus ledger
+    # on this sync-psycopg DSN (RLS-scoped per company under the non-superuser role). Empty → derive
+    # from database_url (strip the +asyncpg driver marker).
+    engine_ledger_dsn: str = ""
+
+    def resolved_engine_ledger_dsn(self) -> str:
+        return self.engine_ledger_dsn or self.database_url.replace("+asyncpg", "")
+
 
 def get_settings() -> Settings:
     return Settings()

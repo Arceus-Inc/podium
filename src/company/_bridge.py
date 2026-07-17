@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Sequence
-from datetime import UTC, datetime
 from hashlib import sha256
 
 from chorus.events import Event, EventKind
@@ -128,14 +127,9 @@ class ChorusIntakePort:
         return task.id
 
     def set_priority(self, task_id: str, priority: Priority) -> None:
-        # chorus has no reprioritize facade yet; the bridge writes ``task.priority`` directly (the
-        # proper seam lands with the M2 Prioritiser). A pure data write — never a scheduler call.
-        conn = self._chorus._ledger._conn
-        conn.execute(
-            "UPDATE task SET priority = ?, updated_at = ? WHERE id = ?",
-            (_to_priority(priority).value, datetime.now(UTC).isoformat(), task_id),
-        )
-        conn.commit()
+        # A pure data write through the repo layer — portable across ledger drivers; never a
+        # scheduler call. (The richer reprioritise facade lands with the M2 Prioritiser.)
+        self._chorus._ledger.tasks.set_priority(task_id, _to_priority(priority))
 
 
 class ChorusOutcomeFeed:

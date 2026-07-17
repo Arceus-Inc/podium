@@ -14,7 +14,7 @@ dependencies = [
   # The four engine repos. This package is the ONE production module allowed to import
   # both chorus and horizon (CON-001 exempts composition roots by name, not by accident).
   "dream",
-  "chorus",
+  "chorus[postgres]",  # M5: the engine ledger runs on Postgres in podium
   "lattice",
   "horizon",
   # M0 backend stack.
