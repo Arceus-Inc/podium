@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies.service import get_company
+from podium.control._allocation import AllocationBoard
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
 from podium.control._observe import CompanyStatus, SkillSummary
@@ -287,3 +288,20 @@ async def terminate(
         raise HTTPException(status_code=404, detail="employee not found") from exc
     except OrgInvariantViolation as exc:  # e.g. the protected org root
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/allocation", response_model=AllocationBoard)
+async def allocation(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> AllocationBoard:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.allocation.board(),
+    )

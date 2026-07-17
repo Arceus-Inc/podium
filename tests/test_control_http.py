@@ -314,3 +314,64 @@ async def test_hire_and_terminate_doors(
 
     missing = await api.delete(f"{base}/employees/nobody", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_allocation_snapshot_reads_ledger_truth(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """CP-4: allocation is observable state (OBS P6) — queued wakes, running beats with leases,
+    blocked tasks — read from the ledger, never reconstructed from events."""
+    from datetime import UTC, datetime, timedelta
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Run, RunStatus, Task, TaskStatus, Wake, WakeReason
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="al")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        queued_task = mint_id()
+        ledger.tasks.submit(Task(id=queued_task, intent="waiting", assignee_employee_id="ada"))
+        ledger.tasks.set_status(queued_task, TaskStatus.TODO)
+        ledger.wakes.enqueue(
+            Wake(
+                id=mint_id(),
+                employee_id="ada",
+                reason=WakeReason.TASK_ASSIGNED,
+                payload={"task_id": queued_task},
+            )
+        )
+        running_task = mint_id()
+        run_id = mint_id()
+        ledger.tasks.submit(Task(id=running_task, intent="live", assignee_employee_id="ada"))
+        ledger.tasks.set_status(running_task, TaskStatus.TODO)
+        assert ledger.tasks.checkout(running_task, employee_id="ada", run_id=run_id)
+        ledger.runs.create(
+            Run(
+                id=run_id,
+                employee_id="ada",
+                task_id=running_task,
+                status=RunStatus.RUNNING,
+                lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                started_at=datetime.now(UTC),
+            )
+        )
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/allocation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [q["task_id"] for q in body["queued"]] == [queued_task]
+    assert body["queued"][0]["reason"] == "task_assigned"
+    assert [r["run_id"] for r in body["running"]] == [run_id]
+    assert body["running"][0]["employee_id"] == "ada"
+    assert body["running"][0]["lease_expires_at"] is not None
+    assert isinstance(body["blocked"], list)
