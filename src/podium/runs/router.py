@@ -44,7 +44,7 @@ async def create(
 ) -> RunOut:
     _authorize(actor, "create", company_id)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_company(session, company_id) is None:
+        if await get_company(session, company_id, user_id=actor.user_id) is None:
             raise HTTPException(status_code=404, detail="company not found")
         run, _created = await create_run(
             session,

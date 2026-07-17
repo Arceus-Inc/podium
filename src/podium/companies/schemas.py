@@ -20,6 +20,7 @@ class CompanyOut(BaseModel):
 
     id: uuid.UUID
     workspace_id: uuid.UUID
+    owner_user_id: uuid.UUID | None
     slug: str
     name: str
     state: str

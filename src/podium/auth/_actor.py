@@ -17,6 +17,11 @@ class Actor:
     actor_type: str  # "service" in M1b-1; "user" arrives with the users table
     actor_id: uuid.UUID  # the user id (user keys) or the api-key id (service keys)
 
+    @property
+    def user_id(self) -> uuid.UUID | None:
+        """The acting user, or None for a service key — the ownership-authz axis (M5 §2.5)."""
+        return self.actor_id if self.actor_type == "user" else None
+
 
 @dataclass(frozen=True)
 class Resource:

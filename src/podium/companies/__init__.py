@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from podium.companies.models import Company
-from podium.companies.service import create_company, get_company, list_companies
+from podium.companies.service import (
+    company_visible,
+    create_company,
+    get_company,
+    list_companies,
+)
 
-__all__ = ["Company", "create_company", "get_company", "list_companies"]
+__all__ = ["Company", "company_visible", "create_company", "get_company", "list_companies"]

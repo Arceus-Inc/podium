@@ -40,6 +40,7 @@ async def create(
         company = await create_company(
             session,
             workspace_id=actor.workspace_id,
+            owner_user_id=actor.user_id,  # a service key creates workspace-owned (None)
             slug=body.slug,
             name=body.name,
             config=body.config,
@@ -56,7 +57,7 @@ async def list_(
 ) -> list[CompanyOut]:
     _authorize(actor, "read", workspace_id)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        rows = await list_companies(session)
+        rows = await list_companies(session, user_id=actor.user_id)
         return [CompanyOut.model_validate(row) for row in rows]
 
 
@@ -69,7 +70,7 @@ async def get(
 ) -> CompanyOut:
     _authorize(actor, "read", workspace_id, company_id)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        company = await get_company(session, company_id)
+        company = await get_company(session, company_id, user_id=actor.user_id)
     if company is None:
         raise HTTPException(status_code=404, detail="company not found")
     return CompanyOut.model_validate(company)

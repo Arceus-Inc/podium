@@ -23,9 +23,11 @@ async def create_company(
     name: str,
     config: dict[str, Any] | None = None,
     ledger_backend: str = "sqlite",
+    owner_user_id: uuid.UUID | None = None,
 ) -> Company:
     company = Company(
         workspace_id=workspace_id,
+        owner_user_id=owner_user_id,
         slug=slug,
         name=name,
         config=config or {},
@@ -36,11 +38,26 @@ async def create_company(
     return company
 
 
-async def list_companies(session: AsyncSession) -> Sequence[Company]:
-    """Every company the current tenant session may see. RLS scopes the rows — no WHERE needed."""
-    return (await session.execute(select(Company))).scalars().all()
+def company_visible(company: Company, *, user_id: uuid.UUID | None) -> bool:
+    """Ownership authz WITHIN the workspace (M5 §2.5): a service actor (user_id None) sees all;
+    a user actor sees workspace-owned companies (no owner) and their own."""
+    return user_id is None or company.owner_user_id is None or company.owner_user_id == user_id
 
 
-async def get_company(session: AsyncSession, company_id: uuid.UUID) -> Company | None:
-    """Fetch by id within the tenant session. RLS returns None for another tenant's id."""
-    return await session.get(Company, company_id)
+async def list_companies(
+    session: AsyncSession, *, user_id: uuid.UUID | None = None
+) -> Sequence[Company]:
+    """Every company the actor may see: RLS walls the workspace; ownership filters within it."""
+    rows = (await session.execute(select(Company))).scalars().all()
+    return [company for company in rows if company_visible(company, user_id=user_id)]
+
+
+async def get_company(
+    session: AsyncSession, company_id: uuid.UUID, *, user_id: uuid.UUID | None = None
+) -> Company | None:
+    """Fetch by id within the tenant session. RLS hides another tenant's id; ownership hides
+    another member's company (both read as None → 404 at the boundary)."""
+    company = await session.get(Company, company_id)
+    if company is None or not company_visible(company, user_id=user_id):
+        return None
+    return company

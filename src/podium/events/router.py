@@ -65,7 +65,7 @@ async def stream(
     ):
         raise HTTPException(status_code=403, detail="forbidden")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_company(session, company_id) is None:  # RLS hides a foreign company → 404
+        if await get_company(session, company_id, user_id=actor.user_id) is None:  # hidden → 404
             raise HTTPException(status_code=404, detail="company not found")
 
     header_id = request.headers.get("last-event-id")

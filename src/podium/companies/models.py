@@ -26,6 +26,10 @@ class Company(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id")
     )  # tenant scope
+    # NULL = workspace-owned (created by a service key); set = the member who owns it (M5 §2.5).
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
     slug: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)
     state: Mapped[str] = mapped_column(
