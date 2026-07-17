@@ -8,31 +8,35 @@ dropped anywhere between the four repos fails HERE, not in a live run.
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from company import CompanyConfig, CompanyGraph, build
 from company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
 
 
-def _config(tmp_path: Path) -> CompanyConfig:
+def _config(tmp_path: Path, database_url: str) -> CompanyConfig:
     return CompanyConfig(
         api_key="test-key",
         base_url="https://example.invalid/openai/v1",
         deployment="gpt-test",
         workdir=tmp_path,
-        company_id="acme",
+        company_id=str(uuid4()),
+        ledger_dsn=database_url.replace("+asyncpg", "").replace(
+            "://postgres@", "://podium_app@"
+        ),
     )
 
 
-def test_build_returns_a_fully_wired_graph(tmp_path: Path) -> None:
-    graph = build(_config(tmp_path))
+def test_build_returns_a_fully_wired_graph(tmp_path: Path, database_url: str) -> None:
+    graph = build(_config(tmp_path, database_url))
 
     assert isinstance(graph, CompanyGraph)
     assert graph.governance is not None
 
 
-def test_scheduler_registers_every_execution_seam(tmp_path: Path) -> None:
+def test_scheduler_registers_every_execution_seam(tmp_path: Path, database_url: str) -> None:
     """The memory_writer regression pin — plus every other seam the kernel executes through."""
-    scheduler = build(_config(tmp_path)).org._scheduler
+    scheduler = build(_config(tmp_path, database_url)).org._scheduler
 
     required = (
         "_memory_writer",  # episodic capture (the seam Chorus.build once dropped)
@@ -48,8 +52,8 @@ def test_scheduler_registers_every_execution_seam(tmp_path: Path) -> None:
     assert not missing, f"Chorus.build dropped execution seams: {missing}"
 
 
-def test_horizon_ports_are_bound_to_chorus_adapters(tmp_path: Path) -> None:
-    graph = build(_config(tmp_path))
+def test_horizon_ports_are_bound_to_chorus_adapters(tmp_path: Path, database_url: str) -> None:
+    graph = build(_config(tmp_path, database_url))
 
     assert isinstance(graph.horizon._goals, ChorusGoalStore)
     assert isinstance(graph.horizon._intake, ChorusIntakePort)
@@ -59,8 +63,8 @@ def test_horizon_ports_are_bound_to_chorus_adapters(tmp_path: Path) -> None:
     assert graph.horizon._capacity is not None
 
 
-def test_ceo_factory_carries_governance_and_the_shared_ledger(tmp_path: Path) -> None:
-    graph = build(_config(tmp_path))
+def test_ceo_factory_carries_governance_and_the_shared_ledger(tmp_path: Path, database_url: str) -> None:
+    graph = build(_config(tmp_path, database_url))
 
     assert graph.ceo_factory._governance is graph.governance
     # ONE ledger: a reviewer's verdict and the factory's capability tools land in the same store.
@@ -68,8 +72,8 @@ def test_ceo_factory_carries_governance_and_the_shared_ledger(tmp_path: Path) ->
     assert graph.factory._ledger is graph.org._ledger
 
 
-def test_intake_submit_lands_in_the_shared_ledger(tmp_path: Path) -> None:
-    graph = build(_config(tmp_path))
+def test_intake_submit_lands_in_the_shared_ledger(tmp_path: Path, database_url: str) -> None:
+    graph = build(_config(tmp_path, database_url))
     employee = graph.org.hire(name="Bex", role="backend_engineer")
 
     task_id = graph.horizon._intake.submit(

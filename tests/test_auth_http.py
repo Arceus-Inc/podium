@@ -66,7 +66,7 @@ async def test_create_and_list_within_own_tenant(
         f"/v1/workspaces/{a_id}/companies", json={"slug": "aco", "name": "A Co"}, headers=headers
     )
     assert created.status_code == 201, created.text
-    assert created.json()["workspace_id"] == a_id
+    assert created.json()["workspace_id"] == str(a_id)  # uuids serialize canonical
 
     listed = await api.get(f"/v1/workspaces/{a_id}/companies", headers=headers)
     assert listed.status_code == 200

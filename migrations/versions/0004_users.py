@@ -11,18 +11,21 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0004_users"
 down_revision: str | None = "0003_api_keys"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+_WORKSPACE_GUC_UUID = "(NULLIF(current_setting('app.workspace_id', true), ''))::uuid"
+
 
 def upgrade() -> None:
     op.create_table(
         "users",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
+        sa.Column("id", postgresql.UUID(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
         sa.Column("email", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -39,12 +42,12 @@ def upgrade() -> None:
     op.execute("ALTER TABLE users FORCE ROW LEVEL SECURITY")
     op.execute(
         "CREATE POLICY users_tenant_isolation ON users "
-        "USING (workspace_id = current_setting('app.workspace_id', true)) "
-        "WITH CHECK (workspace_id = current_setting('app.workspace_id', true))"
+        f"USING (workspace_id = {_WORKSPACE_GUC_UUID}) "
+        f"WITH CHECK (workspace_id = {_WORKSPACE_GUC_UUID})"
     )
 
     # Link a key to a user (nullable — service keys have no user).
-    op.add_column("api_keys", sa.Column("user_id", sa.String(), nullable=True))
+    op.add_column("api_keys", sa.Column("user_id", postgresql.UUID(), nullable=True))
     op.create_foreign_key(
         op.f("fk_api_keys_user_id_users"), "api_keys", "users", ["user_id"], ["id"]
     )

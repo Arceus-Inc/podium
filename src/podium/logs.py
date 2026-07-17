@@ -16,44 +16,50 @@ ponytail: synchronous file I/O — transcripts are small and appended in short b
 from __future__ import annotations
 
 import hashlib
+import uuid
 from pathlib import Path
 from typing import Any
 
 
 class RunLogStore:
-    """One append-only UTF-8 file per run under `root`, addressed by run id."""
+    """One append-only UTF-8 file per run under `root`, addressed by run id.
+
+    Run ids are uuids, so the derived filename can never escape the root (canonical uuid text is
+    hex + hyphens — the type is the path-safety guarantee).
+    """
 
     def __init__(self, root: Path) -> None:
         self._root = root
 
-    def _path(self, run_id: str) -> Path:
-        # Defense-in-depth: run ids are system-minted, but never let one escape the root.
-        if "/" in run_id or "\\" in run_id or ".." in run_id:
-            raise ValueError(f"unsafe run id: {run_id!r}")
+    def _path(self, run_id: uuid.UUID) -> Path:
+        # Defense-in-depth behind the type wall: this class writes to the filesystem, so refuse a
+        # smuggled string at runtime too (canonical uuid text can never traverse paths).
+        if not isinstance(run_id, uuid.UUID):
+            raise TypeError(f"run_id must be uuid.UUID, got {type(run_id).__name__}")
         return self._root / f"{run_id}.log"
 
-    def ref(self, run_id: str) -> str:
+    def ref(self, run_id: uuid.UUID) -> str:
         """The pointer stored in `runs.log_ref` (a root-relative path)."""
         return f"{run_id}.log"
 
-    def exists(self, run_id: str) -> bool:
+    def exists(self, run_id: uuid.UUID) -> bool:
         return self._path(run_id).exists()
 
-    def append(self, run_id: str, text: str) -> None:
+    def append(self, run_id: uuid.UUID, text: str) -> None:
         path = self._path(run_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as stream:
             stream.write(text)
 
-    def read(self, run_id: str) -> str:
+    def read(self, run_id: uuid.UUID) -> str:
         return self._path(run_id).read_text(encoding="utf-8")
 
-    def load(self, run_id: str) -> tuple[bytes, str]:
+    def load(self, run_id: uuid.UUID) -> tuple[bytes, str]:
         """(raw bytes, sha256 hex) in a single read — for serving with an integrity header."""
         data = self._path(run_id).read_bytes()
         return data, hashlib.sha256(data).hexdigest()
 
-    def digest(self, run_id: str) -> tuple[int, str]:
+    def digest(self, run_id: uuid.UUID) -> tuple[int, str]:
         """(byte length, sha256 hex)."""
         data, sha = self.load(run_id)
         return len(data), sha

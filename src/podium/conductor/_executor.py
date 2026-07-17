@@ -5,6 +5,7 @@ with a fake, and confines all chorus/model coupling to the real implementation.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -28,9 +29,9 @@ class RunExecutor(Protocol):
     async def execute(
         self,
         *,
-        run_id: str,
-        workspace_id: str,
-        company_id: str,
+        run_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        company_id: uuid.UUID,
         directive: str,
         is_canceled: CancelCheck,
     ) -> ExecutionResult: ...

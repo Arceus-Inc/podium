@@ -4,10 +4,15 @@
 `app.workspace_id` for that transaction only (`set_config(..., is_local => true)`), so RLS policies
 (M1) and the conductor's DB sessions read the same GUC. The value is bound as a parameter — never
 interpolated — because `SET LOCAL` cannot take a bind param but `set_config()` can.
+
+The workspace id is a `uuid.UUID` at the boundary; GUCs are text, so it travels as its canonical
+string and every RLS policy casts it back (`(current_setting('app.workspace_id', true))::uuid`) —
+uuid = uuid comparisons, DB-validated, fail-closed to zero rows when unset.
 """
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -19,7 +24,7 @@ WORKSPACE_GUC = "app.workspace_id"
 
 @asynccontextmanager
 async def tenant_session(
-    sessionmaker: async_sessionmaker[AsyncSession], workspace_id: str
+    sessionmaker: async_sessionmaker[AsyncSession], workspace_id: uuid.UUID
 ) -> AsyncIterator[AsyncSession]:
     """Yield a session inside a transaction with `app.workspace_id` pinned for that transaction.
 
@@ -29,6 +34,6 @@ async def tenant_session(
     async with sessionmaker() as session, session.begin():
         await session.execute(
             text("SELECT set_config(:key, :val, true)"),
-            {"key": WORKSPACE_GUC, "val": workspace_id},
+            {"key": WORKSPACE_GUC, "val": str(workspace_id)},
         )
         yield session

@@ -5,11 +5,12 @@ Run *starts* are the queued `runs` row itself; commands carry control signals ag
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from podium.db import Base
@@ -22,10 +23,14 @@ def _now() -> datetime:
 class Command(Base):
     __tablename__ = "commands"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True)  # cmd_<uuid4hex>
-    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"))
-    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"))
-    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workspaces.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True
+    )
     type: Mapped[str] = mapped_column(String)  # cancel | stop | pause
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

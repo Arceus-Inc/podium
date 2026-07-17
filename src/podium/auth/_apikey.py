@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from uuid import uuid4
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,15 +25,14 @@ def hash_token(token: str) -> str:
 async def create_api_key(
     session: AsyncSession,
     *,
-    workspace_id: str,
+    workspace_id: uuid.UUID,
     name: str,
-    company_id: str | None = None,
-    user_id: str | None = None,
+    company_id: uuid.UUID | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> tuple[ApiKey, str]:
     """Create a key and return (row, raw_token). The raw token is returned ONCE — never stored."""
     token = generate_token()
     key = ApiKey(
-        id=f"ak_{uuid4().hex}",
         workspace_id=workspace_id,
         company_id=company_id,
         user_id=user_id,
@@ -42,7 +41,7 @@ async def create_api_key(
         name=name,
     )
     session.add(key)
-    await session.flush()
+    await session.flush()  # DB mints the uuidv7 id; RETURNING fills it
     return key, token
 
 

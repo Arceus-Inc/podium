@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
-from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,12 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from podium.users.models import User
 
 
-def _mint_id() -> str:
-    return f"usr_{uuid4().hex}"
-
-
-async def create_user(session: AsyncSession, *, workspace_id: str, email: str, name: str) -> User:
-    user = User(id=_mint_id(), workspace_id=workspace_id, email=email, name=name)
+async def create_user(
+    session: AsyncSession, *, workspace_id: uuid.UUID, email: str, name: str
+) -> User:
+    user = User(workspace_id=workspace_id, email=email, name=name)
     session.add(user)
     await session.flush()
     return user

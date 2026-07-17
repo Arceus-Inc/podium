@@ -19,6 +19,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _TENANT_TABLES = ("runs", "commands")
+_WORKSPACE_GUC_UUID = "(NULLIF(current_setting('app.workspace_id', true), ''))::uuid"
 
 
 def _enable_rls(table: str) -> None:
@@ -26,17 +27,17 @@ def _enable_rls(table: str) -> None:
     op.execute(f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY")
     op.execute(
         f"CREATE POLICY {table}_tenant_isolation ON {table} "
-        "USING (workspace_id = current_setting('app.workspace_id', true)) "
-        "WITH CHECK (workspace_id = current_setting('app.workspace_id', true))"
+        f"USING (workspace_id = {_WORKSPACE_GUC_UUID}) "
+        f"WITH CHECK (workspace_id = {_WORKSPACE_GUC_UUID})"
     )
 
 
 def upgrade() -> None:
     op.create_table(
         "runs",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
-        sa.Column("company_id", sa.String(), nullable=False),
+        sa.Column("id", postgresql.UUID(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
+        sa.Column("company_id", postgresql.UUID(), nullable=False),
         sa.Column("directive", sa.String(), nullable=False),
         sa.Column("idempotency_key", sa.String(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
@@ -61,10 +62,10 @@ def upgrade() -> None:
 
     op.create_table(
         "commands",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
-        sa.Column("company_id", sa.String(), nullable=False),
-        sa.Column("run_id", sa.String(), nullable=True),
+        sa.Column("id", postgresql.UUID(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
+        sa.Column("company_id", postgresql.UUID(), nullable=False),
+        sa.Column("run_id", postgresql.UUID(), nullable=True),
         sa.Column("type", sa.String(), nullable=False),
         sa.Column("payload", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),

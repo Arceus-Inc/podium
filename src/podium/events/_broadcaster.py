@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -27,16 +28,16 @@ EVENTS_CHANNEL = "podium_events"  # the mirror's outbox NOTIFY channel (imported
 class Wake:
     """A NOTIFY parsed off the channel — a cursor + hint, not the event itself (the row has that)."""
 
-    company_id: str
+    company_id: uuid.UUID
     seq: int
-    run_id: str | None
+    run_id: uuid.UUID | None
     type: str
 
 
 class Subscription:
     """One SSE client's inbox. `overflowed` means the client fell behind and should be dropped."""
 
-    def __init__(self, company_id: str, maxsize: int) -> None:
+    def __init__(self, company_id: uuid.UUID, maxsize: int) -> None:
         self.company_id = company_id
         self.overflowed = False
         self._queue: asyncio.Queue[Wake] = asyncio.Queue(maxsize=maxsize)
@@ -58,7 +59,7 @@ class Broadcaster:
         self._dsn = dsn
         self._channel = channel
         self._default_maxsize = default_maxsize
-        self._subs: dict[str, set[Subscription]] = defaultdict(set)
+        self._subs: dict[uuid.UUID, set[Subscription]] = defaultdict(set)
         self._conn: asyncpg.Connection | None = None
 
     @classmethod
@@ -75,7 +76,7 @@ class Broadcaster:
             await self._conn.close()
             self._conn = None
 
-    def subscribe(self, company_id: str, *, maxsize: int | None = None) -> Subscription:
+    def subscribe(self, company_id: uuid.UUID, *, maxsize: int | None = None) -> Subscription:
         sub = Subscription(company_id, maxsize or self._default_maxsize)
         self._subs[company_id].add(sub)
         return sub
@@ -90,10 +91,11 @@ class Broadcaster:
     def _on_notify(self, _conn: object, _pid: int, _channel: str, payload: str) -> None:
         try:
             data = json.loads(payload)
+            raw_run_id = data.get("run_id")
             wake = Wake(
-                company_id=data["company_id"],
+                company_id=uuid.UUID(data["company_id"]),
                 seq=int(data["seq"]),
-                run_id=data.get("run_id"),
+                run_id=uuid.UUID(raw_run_id) if raw_run_id is not None else None,
                 type=data["type"],
             )
         except (ValueError, KeyError, TypeError):

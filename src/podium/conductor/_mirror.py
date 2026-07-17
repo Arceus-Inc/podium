@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,8 +29,8 @@ class EventMirror:
         self,
         sessionmaker: async_sessionmaker[AsyncSession],
         *,
-        company_id: str,
-        workspace_id: str,
+        company_id: uuid.UUID,
+        workspace_id: uuid.UUID,
         log_store: RunLogStore | None = None,
         excerpt_chars: int = 2000,
     ) -> None:
@@ -40,14 +41,15 @@ class EventMirror:
         self._excerpt_chars = excerpt_chars
         # ponytail: one short id per run that has produced logs — bounded by runs on this company
         # graph's lifetime (negligible), and only an optimization (set_log_ref is guarded anyway).
-        self._logged_runs: set[str] = set()
+        self._logged_runs: set[uuid.UUID] = set()
         self._next_seq: int | None = None
-        self._task_to_run: dict[str, str] = {}
+        # Chorus-minted task ids (text, engine context) → podium run ids (uuid).
+        self._task_to_run: dict[str, uuid.UUID] = {}
         self._lock = (
             asyncio.Lock()
         )  # serialise seq assignment even if record() is called concurrently
 
-    def register_run(self, *, run_id: str, engine_task_id: str) -> None:
+    def register_run(self, *, run_id: uuid.UUID, engine_task_id: str) -> None:
         """Tell the mirror which podium run a chorus root task belongs to (for event routing)."""
         self._task_to_run[engine_task_id] = run_id
 
@@ -113,10 +115,18 @@ class EventMirror:
 
 
 async def _notify(
-    session: AsyncSession, company_id: str, seq: int, run_id: str | None, type: str
+    session: AsyncSession, company_id: uuid.UUID, seq: int, run_id: uuid.UUID | None, type: str
 ) -> None:
     # Small payload — the row carries the full event; a tailer reads it by (company_id, seq).
-    body = json.dumps({"company_id": company_id, "seq": seq, "run_id": run_id, "type": type})
+    # NOTIFY bodies are text: uuids travel as canonical strings and are parsed back on receipt.
+    body = json.dumps(
+        {
+            "company_id": str(company_id),
+            "seq": seq,
+            "run_id": str(run_id) if run_id is not None else None,
+            "type": type,
+        }
+    )
     await session.execute(
         text("SELECT pg_notify(:channel, :body)"), {"channel": EVENTS_CHANNEL, "body": body}
     )

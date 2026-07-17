@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "0003_api_keys"
 down_revision: str | None = "0002_companies_rls"
@@ -21,9 +22,9 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "api_keys",
-        sa.Column("id", sa.String(), nullable=False),
-        sa.Column("workspace_id", sa.String(), nullable=False),
-        sa.Column("company_id", sa.String(), nullable=True),
+        sa.Column("id", postgresql.UUID(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("workspace_id", postgresql.UUID(), nullable=False),
+        sa.Column("company_id", postgresql.UUID(), nullable=True),
         sa.Column("key_hash", sa.String(), nullable=False),
         sa.Column("prefix", sa.String(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),

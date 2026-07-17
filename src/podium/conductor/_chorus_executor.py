@@ -6,10 +6,14 @@ subscribed to the graph's EventBus. The executor submits the directive, records 
 (`engine_task_id` + `register_run`) so events route to the run, then pulses `tick()`+`drain()` until
 the task is terminal. All model/LLM + event work rides the company's own ledger/bus; the product DB
 is touched only for short mirror writes.
+
+Podium ids are uuids; chorus ids (task/employee) are chorus-minted text until the M5.2 engine port.
+The uuid→str conversions at `CompanyConfig`/workdir are that boundary, made explicit.
 """
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +22,7 @@ from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from company import CompanyConfig, CompanyGraph, build
+from podium.companies import mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
@@ -52,6 +57,7 @@ class CompanyGraphHost:
         workdir: Path,
         app_sessionmaker: async_sessionmaker[AsyncSession],
         log_store: RunLogStore,
+        engine_ledger_dsn: str = "",
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
@@ -59,9 +65,10 @@ class CompanyGraphHost:
         self._workdir = workdir
         self._app_sm = app_sessionmaker
         self._log_store = log_store
-        self._runtimes: dict[str, _CompanyRuntime] = {}
+        self._engine_ledger_dsn = engine_ledger_dsn
+        self._runtimes: dict[uuid.UUID, _CompanyRuntime] = {}
 
-    async def ensure(self, company_id: str, workspace_id: str) -> _CompanyRuntime:
+    async def ensure(self, company_id: uuid.UUID, workspace_id: uuid.UUID) -> _CompanyRuntime:
         existing = self._runtimes.get(company_id)
         if existing is not None:
             return existing
@@ -70,13 +77,17 @@ class CompanyGraphHost:
                 api_key=self._api_key,
                 base_url=self._base_url,
                 deployment=self._deployment,
-                workdir=self._workdir / company_id,
-                company_id=company_id,
+                workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
+                company_id=str(company_id),
+                ledger_dsn=self._engine_ledger_dsn,
             )
         )
         # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
-        # workforce from the company config.
-        worker = graph.org.hire(name="Ace", role="backend_engineer")
+        # workforce from the company config. Idempotent: a saga retry (built, idle-flip failed)
+        # finds the worker already hired in the engine store.
+        worker = graph.org._ledger.employees.get("ace") or graph.org.hire(
+            name="Ace", role="backend_engineer"
+        )
         mirror = EventMirror(
             self._app_sm,
             company_id=company_id,
@@ -87,11 +98,26 @@ class CompanyGraphHost:
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()
         runtime = _CompanyRuntime(graph=graph, assignee=worker.name, mirror=mirror, ingest=ingest)
+        # The provisioning saga's happy edge: the graph built and the engine store is live, so the
+        # company leaves `provisioning`. Any failure up to and INCLUDING the flip leaves the
+        # company provisioning and the runtime uncached — the next ensure genuinely retries.
+        try:
+            async with tenant_session(self._app_sm, workspace_id) as session:
+                await mark_company_idle(session, company_id)
+        except BaseException:
+            await ingest.stop()
+            graph.close()
+            raise
         self._runtimes[company_id] = runtime
         return runtime
 
     async def attach_run(
-        self, runtime: _CompanyRuntime, *, run_id: str, workspace_id: str, engine_task_id: str
+        self,
+        runtime: _CompanyRuntime,
+        *,
+        run_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        engine_task_id: str,
     ) -> None:
         """Bind a podium run to its chorus root task — durably (the column) and in the mirror map."""
         async with tenant_session(self._app_sm, workspace_id) as session:
@@ -101,6 +127,7 @@ class CompanyGraphHost:
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
             await runtime.ingest.stop()
+            runtime.graph.close()  # the company's live Postgres connection
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:
@@ -127,9 +154,9 @@ class ChorusRunExecutor:
     async def execute(
         self,
         *,
-        run_id: str,
-        workspace_id: str,
-        company_id: str,
+        run_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        company_id: uuid.UUID,
         directive: str,
         is_canceled: CancelCheck,
     ) -> ExecutionResult:

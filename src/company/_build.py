@@ -8,6 +8,7 @@ goals. ``tests/test_company_wiring.py`` pins the graph.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 import dream
 from chorus.adapters import CapacityAdapter, DelegatedIntakeAdapter
 from chorus.facade import Caps, Chorus
-from chorus.ledger import SqliteLedger
+from chorus.ledger import Ledger
 from chorus.roles import RolePlugin, RoleRegistry, default_roles
 from chorus_employee import default_landers
 from chorus_harness import EmployeeHarnessFactory
@@ -41,6 +42,9 @@ class CompanyConfig:
     beat_timeout_s: float = 600.0
     max_concurrent_runs: int = 3
     default_assignee: str | None = None
+    # The engine store: chorus's Postgres ledger on this DSN, scoped to `company_id` by FORCE RLS
+    # (company_id must be canonical uuid text). SQLite is retired — a DSN is always required.
+    ledger_dsn: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,13 +57,32 @@ class CompanyGraph:
     factory: EmployeeHarnessFactory  # worker harnesses (worktrees, tools, skills)
     ceo_factory: EmployeeHarnessFactory  # governance-wired CEO harness
 
+    def close(self) -> None:
+        """Release the company's engine store (the one Postgres connection the graph shares)."""
+        self.org._ledger.close()
+
+
+def _open_ledger(config: CompanyConfig) -> Ledger:
+    """One Postgres ledger per company, RLS-scoped (SQLite is retired)."""
+    if not config.ledger_dsn:
+        raise ValueError("ledger_dsn is required — the engine store is Postgres-only")
+    try:
+        uuid.UUID(config.company_id)
+    except ValueError as exc:
+        # The RLS policies cast the session GUC to uuid — fail here, at build, not mid-query.
+        raise ValueError(
+            f"company_id must be canonical uuid text for the Postgres ledger, "
+            f"got {config.company_id!r}"
+        ) from exc
+    return Ledger.open(config.ledger_dsn, company_id=config.company_id)
+
 
 def build(config: CompanyConfig) -> CompanyGraph:
     """Assemble the full company graph over ONE ledger under ``config.workdir``."""
     config.workdir.mkdir(parents=True, exist_ok=True)
     plugins = list(config.roles) if config.roles is not None else list(default_roles())
     registry = RoleRegistry.from_plugins(plugins)
-    ledger = SqliteLedger.open(str(config.workdir / "ledger.db"))
+    ledger = _open_ledger(config)
 
     factory = EmployeeHarnessFactory(
         api_key=config.api_key,
