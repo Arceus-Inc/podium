@@ -21,7 +21,7 @@ from typing import Any
 from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from company import CompanyConfig, CompanyGraph, build
+from cockpit.company import CompanyConfig, CompanyGraph, build
 from podium.companies import mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest

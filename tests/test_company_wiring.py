@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from company import CompanyConfig, CompanyGraph, build
-from company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
+from cockpit.company import CompanyConfig, CompanyGraph, build
+from cockpit.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
 
 
 def _pg_conninfo(database_url: str, *, user: str) -> str:
