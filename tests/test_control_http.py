@@ -265,3 +265,52 @@ async def test_post_goal_rejects_unknown_parent_and_level(
         base, headers=headers, json={"title": "x", "level": "team", "parent_id": mint_id()}
     )
     assert orphan.status_code == 404  # a child must attach to an existing goal
+
+
+async def test_hire_and_terminate_doors(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """Workforce writes are data edits with engine invariants (role registry, slug uniqueness,
+    routine provisioning) — the door delegates to the real engine facade, never re-implements."""
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="hf")
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}"
+
+    hired = await api.post(
+        f"{base}/employees", headers=headers, json={"name": "Ada", "role": "backend_engineer"}
+    )
+    assert hired.status_code == 201
+    assert hired.json()["id"] == "ada"
+    assert hired.json()["role"] == "backend_engineer"
+
+    roster = await api.get(f"{base}/workforce", headers=headers)
+    assert [m["id"] for m in roster.json()] == ["ada"]
+
+    duplicate = await api.post(
+        f"{base}/employees", headers=headers, json={"name": "Ada", "role": "backend_engineer"}
+    )
+    assert duplicate.status_code == 409  # engine slug invariant surfaces as conflict
+
+    unknown_role = await api.post(
+        f"{base}/employees", headers=headers, json={"name": "Zed", "role": "astronaut"}
+    )
+    assert unknown_role.status_code == 422  # engine role registry refuses
+
+    await api.post(
+        f"{base}/employees",
+        headers=headers,
+        json={"name": "Bex", "role": "pm", "reports_to": "ada"},
+    )
+
+    root_protected = await api.delete(f"{base}/employees/ada", headers=headers)
+    assert root_protected.status_code == 409  # the org root cannot be terminated (engine invariant)
+
+    gone = await api.delete(f"{base}/employees/bex", headers=headers)
+    assert gone.status_code == 204
+    roster_after = await api.get(f"{base}/workforce", headers=headers)
+    statuses = {m["id"]: m["status"] for m in roster_after.json()}
+    assert statuses["bex"] == "terminated"
+
+    missing = await api.delete(f"{base}/employees/nobody", headers=headers)
+    assert missing.status_code == 404

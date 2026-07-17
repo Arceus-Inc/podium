@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text, update
@@ -27,6 +27,7 @@ class RunRef:
     workspace_id: uuid.UUID
     company_id: uuid.UUID
     directive: str
+    params: dict[str, object] = field(default_factory=dict)
 
 
 def _now() -> datetime:
@@ -40,6 +41,7 @@ async def create_run(
     company_id: uuid.UUID,
     directive: str,
     idempotency_key: str,
+    params: dict[str, object] | None = None,
 ) -> tuple[Run, bool]:
     """Insert a queued run, or return the existing one for a repeated key. Returns (run, created).
 
@@ -53,6 +55,7 @@ async def create_run(
             company_id=company_id,
             directive=directive,
             idempotency_key=idempotency_key,
+            params=params or {},
             status=RunStatus.QUEUED,
             counts={},
             created_at=now,
@@ -160,13 +163,16 @@ async def request_cancel(session: AsyncSession, run_id: uuid.UUID) -> bool:
 async def queued_run_refs(session: AsyncSession, *, limit: int) -> list[RunRef]:
     """Queued runs awaiting a worker, oldest first. Cross-tenant — for the conductor's control-plane."""
     stmt = (
-        select(Run.id, Run.workspace_id, Run.company_id, Run.directive)
+        select(Run.id, Run.workspace_id, Run.company_id, Run.directive, Run.params)
         .where(Run.status == RunStatus.QUEUED)
         .order_by(Run.created_at)
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
-    return [RunRef(id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3]) for r in rows]
+    return [
+        RunRef(id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3], params=r[4] or {})
+        for r in rows
+    ]
 
 
 async def expired_lease_refs(session: AsyncSession) -> list[tuple[uuid.UUID, uuid.UUID]]:

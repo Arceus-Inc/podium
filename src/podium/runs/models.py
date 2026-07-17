@@ -54,6 +54,9 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String, default=RunStatus.QUEUED)
     error: Mapped[str | None] = mapped_column(String, nullable=True)
     counts: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Delegation widening (CP-3): {execution_mode, lead, goal_id, max_team_size,
+    # spend_limit_cents} — durable so a rehydrated conductor re-reads them.
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     log_ref: Mapped[str | None] = mapped_column(String, nullable=True)  # blob pointer, filled in M3
     owner: Mapped[str | None] = mapped_column(String, nullable=True)  # conductor worker holding it
     lease_expires_at: Mapped[datetime | None] = mapped_column(

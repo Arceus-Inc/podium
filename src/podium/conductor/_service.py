@@ -106,6 +106,7 @@ class Conductor:
                 workspace_id=ref.workspace_id,
                 company_id=ref.company_id,
                 directive=ref.directive,
+                params=ref.params,
                 is_canceled=is_canceled,
             )
         except Exception as exc:  # executor failure is a failed run, not a dead worker

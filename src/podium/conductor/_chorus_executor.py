@@ -130,6 +130,24 @@ class CompanyGraphHost:
             runtime.graph.close()  # the company's live Postgres connection
 
 
+def _submit_kwargs(params: dict[str, Any], *, default_assignee: str) -> dict[str, Any]:
+    """Map durable run params onto org.submit kwargs — one run resource, mode discriminates."""
+    if params.get("execution_mode") != "delegation":
+        return {"assignee": default_assignee}
+    from chorus.ledger import ExecutionMode
+
+    kwargs: dict[str, Any] = {
+        "assignee": str(params["lead"]),
+        "execution_mode": ExecutionMode.DELEGATION,
+        "goal_id": str(params["goal_id"]),
+    }
+    if params.get("max_team_size") is not None:
+        kwargs["delegation_max_team_size"] = int(params["max_team_size"])
+    if params.get("spend_limit_cents") is not None:
+        kwargs["delegation_spend_limit_cents"] = int(params["spend_limit_cents"])
+    return kwargs
+
+
 def _root_resolver(graph: CompanyGraph) -> Any:
     """Map any chorus task id to its root (the run's engine_task_id) by walking parents in the ledger."""
     ledger = graph.org._ledger
@@ -159,9 +177,12 @@ class ChorusRunExecutor:
         company_id: uuid.UUID,
         directive: str,
         is_canceled: CancelCheck,
+        params: dict[str, Any] | None = None,
     ) -> ExecutionResult:
         runtime = await self._host.ensure(company_id, workspace_id)
-        task = runtime.graph.org.submit(directive, assignee=runtime.assignee)
+        task = runtime.graph.org.submit(
+            directive, **_submit_kwargs(params or {}, default_assignee=runtime.assignee)
+        )
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
         )

@@ -101,3 +101,41 @@ async def test_runs_require_authentication(
     _token, a_company, _b = await _setup(sessionmaker)
     resp = await api.get(f"/v1/companies/{a_company}/runs/run_whatever")
     assert resp.status_code == 401
+
+
+async def test_create_run_with_delegation_params(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    """CP-3: one run resource, execution_mode discriminates (M4 §3.3) — delegation params are
+    stored durably on the run and echoed back; the conductor threads them into org.submit."""
+    token, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "directive": "ship the launch",
+            "idempotency_key": "dk1",
+            "execution_mode": "delegation",
+            "lead": "lea",
+            "goal_id": "22222222-2222-2222-2222-222222222222",
+            "max_team_size": 3,
+            "spend_limit_cents": 5000,
+        },
+    )
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["params"]["execution_mode"] == "delegation"
+    assert body["params"]["lead"] == "lea"
+    assert body["params"]["max_team_size"] == 3
+
+
+async def test_create_run_delegation_requires_lead_and_goal(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"directive": "ship it", "idempotency_key": "dk2", "execution_mode": "delegation"},
+    )
+    assert response.status_code == 422  # fail at the door, not mid-conductor
