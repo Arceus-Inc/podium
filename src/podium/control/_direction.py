@@ -33,6 +33,46 @@ class DirectionFacade:
     def __init__(self, ledger: Ledger) -> None:
         self._ledger = ledger
 
+    def create_goal(
+        self, *, title: str, level: str, parent_id: str | None = None
+    ) -> GoalNode | None:
+        """Seed direction: a new goal (root, or a child of an existing one). Returns None when
+        the named parent does not exist — a child must attach to real direction."""
+        from chorus.ids import mint_id
+        from chorus.ledger import Goal, GoalLevel
+
+        if parent_id is not None and self._ledger.goals.get(parent_id) is None:
+            return None
+        goal = self._ledger.goals.create(
+            Goal(id=mint_id(), title=title, level=GoalLevel(level), parent_id=parent_id)
+        )
+        return GoalNode(
+            id=goal.id,
+            title=goal.title,
+            level=goal.level.value,
+            status=goal.status,
+            owner=goal.owner_employee_id,
+            children=[],
+        )
+
+    def set_goal_status(self, goal_id: str, status: str) -> GoalNode | None:
+        """Archive/restore a goal — an execution-independent ledger write (M4 §3.2).
+        Returns the updated node (children omitted), or None when the goal is unknown."""
+        from dataclasses import replace
+
+        goal = self._ledger.goals.get(goal_id)
+        if goal is None:
+            return None
+        updated = self._ledger.goals.update(replace(goal, status=status))
+        return GoalNode(
+            id=updated.id,
+            title=updated.title,
+            level=updated.level.value,
+            status=updated.status,
+            owner=updated.owner_employee_id,
+            children=[],
+        )
+
     def goal_tree(self) -> list[GoalNode]:
         """Every root goal with its subtree, engine order."""
         return self._subtrees(parent_id=None, seen=set())
