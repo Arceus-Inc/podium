@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     conductor_lease_seconds: int = 300
     conductor_poll_interval: float = 5.0
     conductor_batch_size: int = 10
+    # The per-run tick budget. The live e2e showed a small directive growing into an engine
+    # marathon (decomposition + verification + follow-up intake) that outlives 60 ticks —
+    # size this to how long you let one directive run before podium calls it timed_out.
+    conductor_max_ticks: int = 60
 
     # The engine state store: every company's chorus ledger runs on this sync-psycopg DSN
     # (RLS-scoped per company under the non-superuser role). Empty → derive from database_url.

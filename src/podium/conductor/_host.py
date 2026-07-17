@@ -41,7 +41,7 @@ def build_conductor(settings: Settings) -> tuple[Conductor, Callable[[], Awaitab
     conductor = Conductor(
         control_sessionmaker=make_sessionmaker(control_engine),
         app_sessionmaker=app_sessionmaker,
-        executor=ChorusRunExecutor(host),
+        executor=ChorusRunExecutor(host, max_ticks=settings.conductor_max_ticks),
         worker_id=settings.instance_id,
         lease_seconds=settings.conductor_lease_seconds,
         batch_size=settings.conductor_batch_size,
