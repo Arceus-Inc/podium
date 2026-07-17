@@ -16,8 +16,11 @@ from starlette.concurrency import run_in_threadpool
 
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies.service import get_company
+from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
+from podium.control._observe import CompanyStatus, SkillSummary
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
+from podium.control._workforce import EmployeeView
 from podium.db import tenant_session
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/companies/{company_id}", tags=["control"])
@@ -81,4 +84,90 @@ async def goal_tree(
         workspace_id=workspace_id,
         company_id=company_id,
         read=lambda plane: plane.direction.goal_tree(),
+    )
+
+
+@router.get("/workforce", response_model=list[EmployeeView])
+async def workforce(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[EmployeeView]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.workforce.roster(),
+    )
+
+
+@router.get("/teams", response_model=list[TeamSummary])
+async def teams(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[TeamSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.delegation.teams(),
+    )
+
+
+@router.get("/capacity", response_model=list[CapacityEntry])
+async def capacity(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[CapacityEntry]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.delegation.capacity(),
+    )
+
+
+@router.get("/status", response_model=CompanyStatus)
+async def status(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CompanyStatus:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.status(),
+    )
+
+
+@router.get("/employees/{employee_id}/skills", response_model=list[SkillSummary])
+async def employee_skills(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[SkillSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.skills(employee_id),
     )

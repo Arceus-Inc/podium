@@ -109,3 +109,65 @@ async def test_foreign_workspace_is_refused_at_decide(
     # decide() (leaks nothing — the path names the workspace, not the company); within the
     # right workspace, an invisible company is 404 via RLS/ownership.
     assert response.status_code == 403
+
+
+async def test_read_doors_serve_workforce_teams_capacity_status_skills(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """One seed, five doors — each a thin fold of the same plane (OBS P4)."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Task, Team
+    from chorus.skills import SkillOrigin, SkillStore
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="rd")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.tasks.submit(Task(id=mint_id(), intent="ship it"))
+        ledger.teams.create(
+            Team(id=mint_id(), name="launch", lead_employee_id="ada", created_by="ada")
+        )
+        SkillStore(ledger).create(
+            employee_id="ada",
+            slug="deploy-checklist",
+            name="Deploy checklist",
+            description="how we ship",
+            when_to_use="before any deploy",
+            file_inventory=[{"path": "SKILL.md", "content": "# Deploy"}],
+            origin=SkillOrigin.CREATED,
+            action="create",
+        )
+    finally:
+        ledger.close()
+
+    def _get(path: str) -> object:
+        return api.get(
+            f"/v1/workspaces/{ws_id}/companies/{company_id}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    workforce = await _get("/workforce")
+    assert workforce.status_code == 200
+    assert [m["id"] for m in workforce.json()] == ["ada"]
+
+    teams = await _get("/teams")
+    assert teams.status_code == 200
+    assert [t["name"] for t in teams.json()] == ["launch"]
+
+    capacity = await _get("/capacity")
+    assert capacity.status_code == 200
+    assert {c["role"] for c in capacity.json()} == {"backend_engineer"}
+
+    status = await _get("/status")
+    assert status.status_code == 200
+    body = status.json()
+    assert body["employees"] == 1
+    assert body["open_tasks"] == 1
+
+    skills = await _get("/employees/ada/skills")
+    assert skills.status_code == 200
+    assert [s["slug"] for s in skills.json()] == ["deploy-checklist"]
