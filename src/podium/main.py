@@ -17,8 +17,8 @@ from podium.conductor._host import build_conductor
 from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
 from podium.dashboard import router as dashboard_router
-from podium.dev import router as dev_router
 from podium.db import make_engine, make_sessionmaker
+from podium.dev import router as dev_router
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
 from podium.http_errors import install_error_handlers
