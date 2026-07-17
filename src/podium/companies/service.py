@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.companies.models import Company
@@ -57,9 +57,12 @@ def company_visible(company: Company, *, user_id: uuid.UUID | None) -> bool:
 async def list_companies(
     session: AsyncSession, *, user_id: uuid.UUID | None = None
 ) -> Sequence[Company]:
-    """Every company the actor may see: RLS walls the workspace; ownership filters within it."""
-    rows = (await session.execute(select(Company))).scalars().all()
-    return [company for company in rows if company_visible(company, user_id=user_id)]
+    """Every company the actor may see: RLS walls the workspace; ownership filters within it —
+    in SQL, so a user actor never over-fetches other members' rows."""
+    stmt = select(Company)
+    if user_id is not None:
+        stmt = stmt.where(or_(Company.owner_user_id.is_(None), Company.owner_user_id == user_id))
+    return (await session.execute(stmt)).scalars().all()
 
 
 async def get_company(

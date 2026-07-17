@@ -82,3 +82,47 @@ async def test_failed_host_leaves_the_company_provisioning(
         company = await get_company(s, company_id)
     assert company is not None and company.state == "provisioning"  # retried next ensure
     await host.aclose()
+
+
+async def test_failed_idle_mark_is_retried_on_the_next_ensure(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The saga's crash edge: graph built but the idle flip failed (transient DB error). The
+    runtime must NOT be cached past the mark — the next ensure retries and completes the flip."""
+    import podium.conductor._chorus_executor as executor_mod
+
+    ws_id, company_id = await _company(sessionmaker)
+    host = CompanyGraphHost(
+        **_FAKE_MODEL,
+        workdir=tmp_path,
+        app_sessionmaker=app_sessionmaker,
+        log_store=RunLogStore(tmp_path / "logs"),
+        engine_ledger_dsn=_pg_conninfo(database_url, user="podium_app"),
+    )
+    real_mark = executor_mod.mark_company_idle
+    calls = {"n": 0}
+
+    async def flaky_mark(session, cid):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient: idle mark failed")
+        return await real_mark(session, cid)
+
+    monkeypatch.setattr(executor_mod, "mark_company_idle", flaky_mark)
+    try:
+        with pytest.raises(RuntimeError, match="transient"):
+            await host.ensure(company_id, ws_id)
+        async with tenant_session(app_sessionmaker, ws_id) as s:
+            company = await get_company(s, company_id)
+        assert company is not None and company.state == "provisioning"  # flip did not happen
+
+        await host.ensure(company_id, ws_id)  # retry completes the saga
+        async with tenant_session(app_sessionmaker, ws_id) as s:
+            company = await get_company(s, company_id)
+        assert company is not None and company.state == "idle"
+    finally:
+        await host.aclose()

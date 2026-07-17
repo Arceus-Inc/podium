@@ -83,8 +83,11 @@ class CompanyGraphHost:
             )
         )
         # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
-        # workforce from the company config.
-        worker = graph.org.hire(name="Ace", role="backend_engineer")
+        # workforce from the company config. Idempotent: a saga retry (built, idle-flip failed)
+        # finds the worker already hired in the engine store.
+        worker = graph.org._ledger.employees.get("ace") or graph.org.hire(
+            name="Ace", role="backend_engineer"
+        )
         mirror = EventMirror(
             self._app_sm,
             company_id=company_id,
@@ -95,11 +98,17 @@ class CompanyGraphHost:
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()
         runtime = _CompanyRuntime(graph=graph, assignee=worker.name, mirror=mirror, ingest=ingest)
-        self._runtimes[company_id] = runtime
         # The provisioning saga's happy edge: the graph built and the engine store is live, so the
-        # company leaves `provisioning`. A failure above leaves it there — retried on next ensure.
-        async with tenant_session(self._app_sm, workspace_id) as session:
-            await mark_company_idle(session, company_id)
+        # company leaves `provisioning`. Any failure up to and INCLUDING the flip leaves the
+        # company provisioning and the runtime uncached — the next ensure genuinely retries.
+        try:
+            async with tenant_session(self._app_sm, workspace_id) as session:
+                await mark_company_idle(session, company_id)
+        except BaseException:
+            await ingest.stop()
+            graph.close()
+            raise
+        self._runtimes[company_id] = runtime
         return runtime
 
     async def attach_run(
@@ -118,9 +127,7 @@ class CompanyGraphHost:
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
             await runtime.ingest.stop()
-            # A Postgres-backed company holds a live server connection — close it cleanly (the
-            # SQLite driver's close is a cheap file-handle release).
-            runtime.graph.org._ledger.close()
+            runtime.graph.close()  # the company's live Postgres connection
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:

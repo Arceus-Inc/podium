@@ -57,6 +57,10 @@ class CompanyGraph:
     factory: EmployeeHarnessFactory  # worker harnesses (worktrees, tools, skills)
     ceo_factory: EmployeeHarnessFactory  # governance-wired CEO harness
 
+    def close(self) -> None:
+        """Release the company's engine store (the one Postgres connection the graph shares)."""
+        self.org._ledger.close()
+
 
 def _open_ledger(config: CompanyConfig) -> Ledger:
     """One Postgres ledger per company, RLS-scoped (SQLite is retired)."""
