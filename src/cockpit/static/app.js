@@ -262,7 +262,9 @@ async function renderWork() {
 }
 
 async function renderDelegation() {
-  const [teams, plans] = await Promise.all([api("/teams"), api("/plans")]);
+  const [teams, plans, roster, goals] = await Promise.all([
+    api("/teams"), api("/plans"), api("/workforce"), api("/goals"),
+  ]);
   const pending = plans.filter((p) => p.status === "proposed");
   const planCard = (p) => card(`Pending workforce plan · rev ${p.revision} · by ${esc(p.proposed_by)}`,
     `<p>${esc(p.rationale)} <span class="pill">confidence ${p.confidence}</span></p>` +
@@ -272,8 +274,24 @@ async function renderDelegation() {
     `<button data-decision="approve">Approve — materialize the org</button>` +
     `<button data-decision="reject" style="background:var(--bad);color:#fff">Reject</button></form>`);
   const decided = plans.filter((p) => p.status !== "proposed");
+  const flatGoals = [];
+  (function walk(nodes) { for (const g of nodes) { flatGoals.push(g); walk(g.children || []); } })(goals);
+  const kickoff = card("Kick off delegated delivery",
+    flatGoals.length
+      ? `<form id="delegate-form" style="flex-direction:column;align-items:stretch;gap:8px">
+          <textarea id="delegate-directive" rows="3" required placeholder="What should the team deliver? Name each IC and the whole module it owns; tell the lead to call team_read then decompose exactly once and never implement in its own beat."></textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <select id="delegate-lead">${roster.map((m) => `<option value="${esc(m.id)}">${esc(m.name)} (${esc(m.role)})</option>`).join("")}</select>
+            <select id="delegate-goal">${flatGoals.map((g) => `<option value="${esc(g.id)}">${esc(g.title)}</option>`).join("")}</select>
+            <input id="delegate-team" type="number" min="2" value="3" style="width:70px" title="max team size" />
+            <input id="delegate-spend" type="number" min="0" value="500000" style="width:110px" title="spend limit (cents)" />
+            <button>Delegate</button>
+          </div>
+        </form><p class="clip" style="margin:8px 0 0">The lead must hold an approved management grant (delegation depth ≥ 1); the kernel refuses anything outside its contract.</p>`
+      : "Seed a goal in Direction first — delegated delivery always serves a goal.");
   return card("The delegation flow (read-only — the kernel is internal)", delegationSVG(teams.length, pending.length)) +
     pending.map(planCard).join("") +
+    kickoff +
     (decided.length ? card("Decided plans", `<table class="t"><tr><th>plan</th><th>status</th><th>decided by</th></tr>${decided.map((p) => `<tr><td>${esc(p.id.slice(0, 8))}… rev ${p.revision}</td><td><span class="pill">${esc(p.status)}</span></td><td>${esc(p.decided_by ?? "—")}</td></tr>`).join("")}</table>`) : "") +
     card(`Mission teams · ${teams.length}`, teams.length ? `<table class="t"><tr><th>team</th><th>lead</th><th>status</th><th>members</th></tr>${teams.map((t) => `<tr><td>${esc(t.name)}</td><td>${esc(t.lead)}</td><td><span class="pill">${esc(t.status)}</span></td><td>${esc(t.members.join(", ") || "—")}</td></tr>`).join("")}</table>` : "No delegated teams yet — submit a delegation-mode run.");
 }
@@ -327,6 +345,27 @@ async function renderOps() {
 
 /* ================= post-render wiring ================= */
 function wireView() {
+  const delegate = $("delegate-form");
+  if (delegate) delegate.onsubmit = async (e) => {
+    e.preventDefault();
+    const response = await fetch(`/v1/companies/${state.ctx.companyId}/runs`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${state.ctx.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        directive: $("delegate-directive").value.trim(),
+        idempotency_key: crypto.randomUUID(),
+        execution_mode: "delegation",
+        lead: $("delegate-lead").value,
+        goal_id: $("delegate-goal").value,
+        max_team_size: Number($("delegate-team").value) || undefined,
+        spend_limit_cents: Number($("delegate-spend").value) || undefined,
+      }),
+    });
+    const run = await response.json().catch(() => ({}));
+    state.runLog = [{ id: run.id, directive: $("delegate-directive").value, status: run.status ?? `error ${response.status}` }, ...state.runLog].slice(0, 12);
+    renderRunLog();
+    if (response.ok) { $("delegate-directive").value = ""; }
+  };
   document.querySelectorAll(".decide-form").forEach((form) => {
     form.onsubmit = (e) => e.preventDefault();
     form.querySelectorAll("button").forEach((btn) => {
