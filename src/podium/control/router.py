@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable
 from typing import Literal, TypeVar
 
+from chorus.errors import OrgInvariantViolation
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,7 +22,12 @@ from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
 from podium.control._observe import CompanyStatus, SkillSummary
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
-from podium.control._workforce import EmployeeView
+from podium.control._workforce import (
+    DuplicateEmployee,
+    EmployeeView,
+    UnknownEmployeeError,
+    UnknownRole,
+)
 from podium.db import tenant_session
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/companies/{company_id}", tags=["control"])
@@ -227,3 +233,57 @@ async def create_goal(
     if node is None:
         raise HTTPException(status_code=404, detail="parent goal not found")
     return node
+
+
+class EmployeeCreate(BaseModel):
+    name: str
+    role: str
+    reports_to: str | None = None  # None = an org root (protected from termination)
+
+
+@router.post("/employees", status_code=201, response_model=EmployeeView)
+async def hire(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    body: EmployeeCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.workforce.hire(
+                name=body.name, role=body.role, reports_to=body.reports_to
+            ),
+        )
+    except UnknownRole as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DuplicateEmployee as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/employees/{employee_id}", status_code=204)
+async def terminate(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> None:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.workforce.terminate(employee_id),
+        )
+    except UnknownEmployeeError as exc:
+        raise HTTPException(status_code=404, detail="employee not found") from exc
+    except OrgInvariantViolation as exc:  # e.g. the protected org root
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
