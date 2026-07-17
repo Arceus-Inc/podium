@@ -268,3 +268,28 @@ async function refreshCosts() {
   }
 }
 $("costs-by").addEventListener("change", refreshCosts);
+
+
+/* ---------- drive it: submit a run from the page ---------- */
+document.getElementById("run-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const directive = document.getElementById("directive").value.trim();
+  if (!directive || !state.ctx) return;
+  const status = document.getElementById("run-status");
+  status.textContent = "submitting…";
+  try {
+    const response = await fetch(`/v1/companies/${state.ctx.companyId}/runs`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.ctx.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ directive, idempotency_key: crypto.randomUUID() }),
+    });
+    const run = await response.json();
+    status.textContent = response.ok ? `run ${run.id.slice(0, 8)}… ${run.status}` : `error ${response.status}`;
+    if (response.ok) document.getElementById("directive").value = "";
+  } catch (error) {
+    status.textContent = String(error);
+  }
+});
