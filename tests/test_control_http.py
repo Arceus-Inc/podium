@@ -171,3 +171,48 @@ async def test_read_doors_serve_workforce_teams_capacity_status_skills(
     skills = await _get("/employees/ada/skills")
     assert skills.status_code == 200
     assert [s["slug"] for s in skills.json()] == ["deploy-checklist"]
+
+
+async def test_patch_goal_archives_it(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """The first write door: archive is an execution-independent ledger write (M4 §3.2 —
+    api-side, short transaction, no conductor round-trip)."""
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="wd")
+    root_id, _ = _seed_goals(database_url, company_id)
+
+    response = await api.patch(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/goals/{root_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "archived"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "archived"
+
+    tree = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/goals",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    root = next(node for node in tree.json() if node["id"] == root_id)
+    assert root["status"] == "archived"
+
+
+async def test_patch_goal_rejects_unknown_status_and_goal(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="wd2")
+    root_id, _ = _seed_goals(database_url, company_id)
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/goals"
+
+    bad_status = await api.patch(f"{base}/{root_id}", headers=headers, json={"status": "gone"})
+    assert bad_status.status_code == 422  # closed vocabulary, schema-validated
+
+    from chorus.ids import mint_id
+
+    missing = await api.patch(f"{base}/{mint_id()}", headers=headers, json={"status": "archived"})
+    assert missing.status_code == 404

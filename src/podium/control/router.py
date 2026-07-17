@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -171,3 +172,29 @@ async def employee_skills(
         company_id=company_id,
         read=lambda plane: plane.observe.skills(employee_id),
     )
+
+
+class GoalPatch(BaseModel):
+    status: Literal["active", "archived"]
+
+
+@router.patch("/goals/{goal_id}", response_model=GoalNode)
+async def patch_goal(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    goal_id: str,
+    body: GoalPatch,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> GoalNode:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    node = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.set_goal_status(goal_id, body.status),
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="goal not found")
+    return node
