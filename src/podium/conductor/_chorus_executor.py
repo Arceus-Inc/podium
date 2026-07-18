@@ -14,6 +14,7 @@ The uuid→str conversions at `CompanyConfig`/workdir are that boundary, made ex
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ class _CompanyRuntime:
     ceo: str  # formation runs route here — the one employee with governance tools
     mirror: EventMirror
     ingest: EventIngest
+    horizon_stop: Callable[[], None] | None = None  # unsubscribe handle for the feedback listener
 
 
 class CompanyGraphHost:
@@ -103,8 +105,18 @@ class CompanyGraphHost:
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()
         graph.org.start()  # the always-on heartbeat: wakes and routines pulse until aclose
+        # offline-fix #1: subscribe horizon's outcome-feedback loop. Without this, the OutcomeListener
+        # never binds, so goal health/score/priority never react to execution and the direction report
+        # stays empty. start() returns the unsubscribe handle we release on teardown (matches horizon's
+        # own company_loop_e2e, which calls horizon.start()).
+        horizon_stop = graph.horizon.start()
         runtime = _CompanyRuntime(
-            graph=graph, assignee=worker.name, ceo=ceo.name, mirror=mirror, ingest=ingest
+            graph=graph,
+            assignee=worker.name,
+            ceo=ceo.name,
+            mirror=mirror,
+            ingest=ingest,
+            horizon_stop=horizon_stop,
         )
         # The provisioning saga's happy edge: the graph built and the engine store is live, so the
         # company leaves `provisioning`. Any failure up to and INCLUDING the flip leaves the
@@ -113,6 +125,7 @@ class CompanyGraphHost:
             async with tenant_session(self._app_sm, workspace_id) as session:
                 await mark_company_idle(session, company_id)
         except BaseException:
+            horizon_stop()
             await graph.org.stop()
             await ingest.stop()
             graph.close()
@@ -146,6 +159,8 @@ class CompanyGraphHost:
 
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
+            if runtime.horizon_stop is not None:
+                runtime.horizon_stop()  # unbind the outcome-feedback listener
             await runtime.graph.org.stop()  # drain in-flight beats before the ledger goes away
             await runtime.ingest.stop()
             runtime.graph.close()  # the company's live Postgres connection
