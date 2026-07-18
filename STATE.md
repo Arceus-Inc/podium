@@ -51,3 +51,12 @@ Last run: iteration 6 — 2026-07-18 ~17:15
   recently-failing employees, floor+review once lattice shows a verified track record,
   rejection knocks trust back. Plug point = the EvidenceProtocol object (agent in flight).
   QUEUED: trust-tiered evidence after the protocol refactor merges.
+
+## OVERRIDING design decision (operator, it.10) — supersedes the it.9 trust-dial note
+
+- NO system verifier, NO kernel-based verification. The employee's own in-beat evaluation IS
+  the verdict. Surgery in flight (worktree agent): reviewed_build DoDs → self-judged
+  agent_review (rubrics keep substance, drop evidence-file demands); TDD gate unwired;
+  SYSTEM_VERIFIER beat removed from leaf + delegation-parent close. Deterministic integrate
+  floor + descendants checks kept for now (flagged as open question).
+- The evidence-protocol refactor (stopped agent) is MOOT — discard its worktree, do not merge.
