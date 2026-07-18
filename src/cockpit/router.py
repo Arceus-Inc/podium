@@ -93,6 +93,28 @@ async def shell_css() -> Response:
     return _serve("style.css")
 
 
+@router.get("/direction-report")
+async def direction_report(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    request: Request,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+) -> dict[str, str]:
+    """The horizon loop's story as markdown — written by the conductor after each run
+    (LoopReporter, restored 2026-07-18). Empty until the direction engine has acted."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    path = get_cockpit_workdir(request) / str(company_id) / "direction-report.md"
+
+    def _read() -> str:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:  # no report yet — degrade, don't block
+            return ""
+
+    return {"markdown": await run_in_threadpool(_read)}
+
+
 @router.get("/semantic/{employee_id}")
 async def semantic_detail(
     workspace_id: uuid.UUID,

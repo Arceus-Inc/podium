@@ -120,6 +120,36 @@ async def test_snapshot_covers_every_component(
     assert facts[0]["activation"] == 1.0
 
 
+async def test_direction_report_serves_the_conductor_written_markdown(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+    tmp_path: Path,
+) -> None:
+    """The LoopReporter consumer (2026-07-18): the conductor writes horizon's report to the
+    company workdir; this door serves it. No report yet -> empty markdown, not an error."""
+    async with sessionmaker() as s, s.begin():
+        ws = await create_workspace(s, name="DR", slug="dr")
+        company = await create_company(s, workspace_id=ws.id, slug="dr", name="DR")
+        _, token = await create_api_key(s, workspace_id=ws.id, name="k")
+        ws_id, company_id = ws.id, company.id
+    url = f"/v1/workspaces/{ws_id}/companies/{company_id}/cockpit/direction-report"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    empty = await api.get(url, headers=headers)
+    assert empty.status_code == 200
+    assert empty.json() == {"markdown": ""}  # degrade, don't block
+
+    report_path = tmp_path / str(company_id) / "direction-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Horizon loop report\n\n## Current direction", encoding="utf-8")
+    served = await api.get(url, headers=headers)
+    assert served.status_code == 200
+    assert "## Current direction" in served.json()["markdown"]
+
+    unauthed = await api.get(url)
+    assert unauthed.status_code == 401
+
+
 async def test_snapshot_requires_auth(
     sessionmaker: async_sessionmaker[AsyncSession], api: httpx.AsyncClient
 ) -> None:
