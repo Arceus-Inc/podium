@@ -257,7 +257,7 @@ async function renderOrg() {
         routines.map((r) => `<tr><td>${esc(r.employee_id)}</td><td><code>${esc(r.schedule ?? "—")}</code></td><td>${esc(r.next_run_at ? r.next_run_at.slice(0, 16).replace("T", " ") : "—")}</td><td><span class="pill">${esc(r.status)}</span></td><td>` +
           `<button class="routine-act" data-routine="${esc(r.id)}" data-act="${r.status === "paused" ? "resume" : "pause"}">${r.status === "paused" ? "Resume" : "Pause"}</button> ` +
           `<button class="routine-act" data-routine="${esc(r.id)}" data-act="fire" title="fire now — writes the task through the engine's cron path">Fire now</button>` +
-        `</td></tr>`).join("") + `</table>`
+        `</td></tr>`).join("") + `</table><div id="routines-note" class="clip"></div>`
       : "No routines yet — hiring a role that declares one (ceo, pm, backend_engineer…) provisions it.");
   return `<div id="lanes">${lanes || card("", "No employees yet — hire below.")}</div>` +
     routinesCard +
@@ -426,7 +426,18 @@ function wireView() {
   document.querySelectorAll(".routine-act").forEach((btn) => {
     btn.onclick = async (e) => {
       e.preventDefault();
-      await api2("POST", `/routines/${btn.dataset.routine}/${btn.dataset.act}`, {});
+      try {
+        await api2("POST", `/routines/${btn.dataset.routine}/${btn.dataset.act}`, {});
+      } catch (err) {
+        // The engine's refusal is a feature (e.g. fire on a COALESCE routine already running) —
+        // show it, don't swallow it.
+        const note = $("routines-note");
+        if (note) note.textContent =
+          btn.dataset.act === "fire" && err.status === 409
+            ? "Did not fire — already running; the firing coalesced into the active run."
+            : `${btn.dataset.act} refused: ${err.message}`;
+        return;
+      }
       render();
     };
   });
@@ -448,7 +459,13 @@ function wireView() {
 const api2 = (method, path, body) =>
   fetch(`/v1/workspaces/${state.ctx.workspaceId}/companies/${state.ctx.companyId}${path}`, {
     method, headers: { Authorization: `Bearer ${state.ctx.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then((r) => { if (!r.ok) throw new Error(`${path} -> ${r.status}`); return r.json(); });
+  }).then(async (r) => {
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail;  // the door's typed refusal, when present
+      throw Object.assign(new Error(detail || `${path} -> ${r.status}`), { status: r.status });
+    }
+    return r.json();
+  });
 
 /* ================= the live architecture map (mirrors chorus-system-architecture-v2) ======= */
 function archSVG(c) {
