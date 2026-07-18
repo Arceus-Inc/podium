@@ -149,3 +149,22 @@ commits) → what ran → outcome → spend.
   this is resilience for other deploys); rides the next restart.
 - Next: H3 routine durable-next-path gate, H5 onboarding beat, H6 typed interactions;
   remaining brief passes (designer/marketer/pm); mind-map; e2e round 3.
+
+## Iterations 9-10 — 2026-07-18 ~18:30 (operator redesign: self-verification)
+
+- **Operator decisions (live dialogue)**: (it.9) TDD gate "looks bad" → Evidence Protocol
+  design written (docs/plans/2026-07-18-evidence-protocol-design.md) + refactor agent started.
+  (it.10, OVERRIDING) "no system verifier, no kernel verification — employees verify their
+  own work." Protocol refactor discarded as moot.
+- **Built (chorus 7469d86 / de114d6, worktree agent)**: backend/engineer DoDs →
+  self-judged agent_review (rubrics keep substance — tests pass WHEN RUN, contract implemented
+  — drop all evidence-file demands); TDD gate unwired from the factory (file kept, dormant);
+  _REVIEWER_GATED_DODS emptied; delegation-parent close no longer dispatches SYSTEM_VERIFIER
+  (lead's own integrate acceptance is the verdict; deterministic descendants check + integrate
+  objective floor KEPT, flagged as open question). Tests: 1081 passed; deleted gate/verifier
+  suites; RED-first no-system-run tests added.
+- **Kept deliberately**: integrate objective floor (_run_verify_command) + descendants check —
+  cheap deterministic command runs, not verifier beats. Dead-code cleanup pass queued
+  (_tdd_gate.py, _run_review, reviewer role, ReviewedBuild type).
+- Restart armed at quiet window → videocursor be corrective = first live beat on the
+  self-verified path.
