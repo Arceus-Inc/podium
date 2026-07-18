@@ -7,7 +7,6 @@ under test. The real ChorusRunExecutor is covered by the skippable integration e
 from __future__ import annotations
 
 import uuid
-
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -387,9 +386,9 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
     carries engine_task_id; a reclaim must resume the watch on it, never submit again."""
     from types import SimpleNamespace
 
-    from podium.conductor._chorus_executor import ChorusRunExecutor
-
     from chorus.ledger import TaskStatus
+
+    from podium.conductor._chorus_executor import ChorusRunExecutor
 
     done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
 
