@@ -56,6 +56,20 @@ class OrgReport(BaseModel):
     dependency_edges: int
 
 
+class WhyLink(BaseModel):
+    """One link in a task's why-chain — task lineage first, then goal lineage (OM-2)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str  # task|goal
+    id: str
+    label: str  # task intent or goal title
+
+
+class UnknownTaskError(ValueError):
+    """No such task in this company."""
+
+
 class ArtifactSummary(BaseModel):
     """One landed outcome — the product shape of an engine artifact."""
 
@@ -86,6 +100,31 @@ class ObserveFacade:
 
     def __init__(self, ledger: Ledger) -> None:
         self._ledger = ledger
+
+    def why(self, task_id: str) -> list[WhyLink]:
+        """The task's full "why am I doing this?" chain, leaf-first: the task, its parent
+        tasks, then the goal lineage up to the company root (paperclip's mandatory parentage,
+        rendered from the columns chorus already stores)."""
+        import uuid as _uuid
+
+        try:
+            _uuid.UUID(task_id)  # engine task ids are uuid text; anything else can't exist
+        except ValueError:
+            raise UnknownTaskError(task_id) from None
+        task = self._ledger.tasks.get(task_id)
+        if task is None:
+            raise UnknownTaskError(task_id)
+        chain: list[WhyLink] = []
+        goal_id = None
+        while task is not None:
+            chain.append(WhyLink(kind="task", id=task.id, label=task.intent))
+            goal_id = task.goal_id or goal_id  # nearest declared goal wins
+            task = self._ledger.tasks.get(task.parent_id) if task.parent_id else None
+        goal = self._ledger.goals.get(goal_id) if goal_id else None
+        while goal is not None:
+            chain.append(WhyLink(kind="goal", id=goal.id, label=goal.title))
+            goal = self._ledger.goals.get(goal.parent_id) if goal.parent_id else None
+        return chain
 
     def status(self) -> CompanyStatus:
         """Counts from the engine's own status projection (never re-derived from events)."""
@@ -170,4 +209,6 @@ __all__ = [
     "OrgReport",
     "SkillSummary",
     "SpendRow",
+    "UnknownTaskError",
+    "WhyLink",
 ]

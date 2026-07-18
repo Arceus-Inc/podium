@@ -265,10 +265,12 @@ async function renderOrg() {
 async function renderWork() {
   const b = await api("/allocation");
   const list = (rows, f) => rows.length ? `<table class="t">${rows.map(f).join("")}</table>` : "—";
+  const whyLink = (taskId) => `<a href="#work" class="why-link" data-task="${esc(taskId)}" title="why am I doing this? — the task's goal parentage">${esc(taskId.slice(0, 8))}…</a>`;
   return `<div class="cols">` +
     card(`Queued · ${b.queued.length}`, list(b.queued, (w) => `<tr><td>${esc(w.employee_id)}</td><td>${esc(w.reason)}</td><td>×${w.coalesced}</td></tr>`)) +
     card(`Running · ${b.running.length}`, list(b.running, (r) => `<tr><td>${esc(r.employee_id)}</td><td>${esc(r.run_id.slice(0, 8))}…</td><td>${esc(r.lease_expires_at ?? "—")}</td></tr>`)) +
-    card(`Blocked · ${b.blocked.length}`, list(b.blocked, (t) => `<tr><td>${esc(t.task_id.slice(0, 8))}…</td><td>${esc(t.intent_excerpt)}</td></tr>`)) + `</div>`;
+    card(`Blocked · ${b.blocked.length}`, list(b.blocked, (t) => `<tr><td>${whyLink(t.task_id)}</td><td>${esc(t.intent_excerpt)}</td></tr>`)) + `</div>` +
+    card("Why-chain", `<div id="why-out" class="clip">Click a task id — the chain reads leaf → parents → goal → company root.</div>`);
 }
 
 async function renderDelegation() {
@@ -392,6 +394,13 @@ function wireView() {
     await api2("POST", "/goals", { title: $("goal-title").value, level: $("goal-level").value });
     render();
   };
+  document.querySelectorAll(".why-link").forEach((link) => {
+    link.onclick = async (e) => {
+      e.preventDefault();
+      const chain = await api(`/tasks/${link.dataset.task}/why`);
+      $("why-out").innerHTML = chain.map((l) => `<span class="pill">${esc(l.kind)}</span> ${esc(l.label)}`).join(" ← ");
+    };
+  });
   document.querySelectorAll(".routine-act").forEach((btn) => {
     btn.onclick = async (e) => {
       e.preventDefault();

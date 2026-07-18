@@ -28,6 +28,8 @@ from podium.control._observe import (
     OrgReport,
     SkillSummary,
     SpendRow,
+    UnknownTaskError,
+    WhyLink,
 )
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
 from podium.control._routines import (
@@ -618,3 +620,25 @@ async def fire_routine_now(
         act=lambda plane: plane.routines.fire(routine_id),
     )
     return {"task_id": task_id}
+
+
+@router.get("/tasks/{task_id}/why", response_model=list[WhyLink])
+async def task_why(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[WhyLink]:
+    """The task's why-chain, leaf-first: task lineage, then goal lineage to the company root."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.why(task_id),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
