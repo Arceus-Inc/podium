@@ -1,6 +1,6 @@
 # Loop State — Arceus free-runner
 
-Last run: iteration 1 — 2026-07-18 ~15:05
+Last run: iteration 3 — 2026-07-18 ~15:20
 
 ## Live context
 
@@ -16,12 +16,12 @@ Last run: iteration 1 — 2026-07-18 ~15:05
 
 ## High priority (act)
 
-1. Watch the delegation to terminal; on failure, mine evaluator notes; on success, record
-   what the org shipped (files in worktrees). Then RESTART the stack so live code picks up
-   iteration-1 fixes (delta 0004 auto-applies).
-2. After restart: fire the review again — it should land DONE with no gate (classifier fix).
-3. lp-be-1's module was rejected and the corrective went to lp-fe-1 — check the lead's
-   corrective brief carried the failure evidence; watch whether the coherence loop converges.
+1. LINKPORT KILLED (user directive). Focus = videocursor
+   (co 019f747d-d5b4-7124-8e6f-bbc866827671).
+2. Watch the lead's corrective dispatches for be/analyst/designer; web tools now live —
+   analyst/marketer re-runs should cite real URLs.
+3. If a corrective repeats its predecessor's failure verbatim, fix child-intent/DoD
+   alignment (lead paraphrase drift) in the delegation brief.
 
 ## Watch list
 

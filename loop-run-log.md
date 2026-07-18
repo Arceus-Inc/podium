@@ -48,3 +48,17 @@ commits) → what ran → outcome → spend.
 - **Ran**: 455 employee tests green; ruff+mypy clean. Stack restarted (fix live; recovery
   resumed the one in-flight corrective).
 - **Queued**: child-intent/DoD alignment (lead paraphrase drift) if correctives don't converge.
+
+## Iteration 3 — 2026-07-18 ~15:20
+
+- **Directive**: kill linkport, focus videocursor. Linkport quiesced (run canceled, 6 open
+  tasks cancelled, 4 wakes dropped, routines paused). Its legacy: fe modules shipped done ×2,
+  links.js converged to "API mismatch" quality feedback — the coherence loop worked but the
+  module never cleared review before the kill.
+- **Observed (videocursor)**: SELF-HEALING — lead re-woke and started its corrective beat
+  unaided. Comment channel used organically: 3 ICs escalated blockers to the lead; the lead
+  replied with direction (OM-3 in the wild). Marketer's web_search failed 6/6.
+- **Root cause found**: chorus/.env has `EMAIL_FROM=Name <mail@x>` — `source` sees a redirect,
+  errors, silently abandons the rest of the file → TAVILY_API_KEY never exported. The boot
+  script now parses KEY=VALUE lines verbatim (podium 00531ad); all 4 key groups verified set.
+- **Ran**: stack restarted with full env after the lead's beat finished; recovery resumes.
