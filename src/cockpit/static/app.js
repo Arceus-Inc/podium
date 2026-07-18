@@ -244,21 +244,35 @@ async function renderOrg() {
   }
   const lanes = [...state.lanes.entries()].map(([id, lane]) => `
     <article class="lane state-${lane.status}">
-      <header><strong>${esc(lane.name)}</strong> <em>${esc(lane.role)}</em><span class="chip pill">${esc(lane.status)}</span></header>
+      <header><strong>${esc(lane.name)}</strong> <em>${esc(lane.role)}</em><span class="chip pill">${esc(lane.status)}</span>
+        ${lane.status === "terminated" ? "" : `<button class="employee-act" data-employee="${esc(id)}" data-act="${lane.status === "paused" ? "resume" : "pause"}" title="board control — a paused employee dispatches no new beats">${lane.status === "paused" ? "Resume" : "Pause"}</button>`}
+      </header>
       <div class="lane-task">${lane.taskId ? `task ${esc(lane.taskId.slice(0, 8))}…` : "—"}</div>
       <ol class="lane-events">${lane.lastEvents.map((e) => `<li>${esc(e.type)}</li>`).join("")}</ol>
     </article>`).join("");
+  const routines = await api("/routines");
+  const routinesCard = card(`Standing routines · ${routines.length}`,
+    routines.length
+      ? `<table class="t"><tr><th>employee</th><th>schedule</th><th>next run</th><th>status</th><th></th></tr>` +
+        routines.map((r) => `<tr><td>${esc(r.employee_id)}</td><td><code>${esc(r.schedule ?? "—")}</code></td><td>${esc(r.next_run_at ? r.next_run_at.slice(0, 16).replace("T", " ") : "—")}</td><td><span class="pill">${esc(r.status)}</span></td><td>` +
+          `<button class="routine-act" data-routine="${esc(r.id)}" data-act="${r.status === "paused" ? "resume" : "pause"}">${r.status === "paused" ? "Resume" : "Pause"}</button> ` +
+          `<button class="routine-act" data-routine="${esc(r.id)}" data-act="fire" title="fire now — writes the task through the engine's cron path">Fire now</button>` +
+        `</td></tr>`).join("") + `</table><div id="routines-note" class="clip"></div>`
+      : "No routines yet — hiring a role that declares one (ceo, pm, backend_engineer…) provisions it.");
   return `<div id="lanes">${lanes || card("", "No employees yet — hire below.")}</div>` +
+    routinesCard +
     card("Hire", `<form id="hire-form"><input id="hire-name" placeholder="name" required /><input id="hire-role" placeholder="role (backend_engineer, pm…)" required /><input id="hire-boss" placeholder="reports_to (blank = root)" /><button>Hire</button></form>`);
 }
 
 async function renderWork() {
   const b = await api("/allocation");
   const list = (rows, f) => rows.length ? `<table class="t">${rows.map(f).join("")}</table>` : "—";
+  const whyLink = (taskId) => `<a href="#work" class="why-link" data-task="${esc(taskId)}" title="why am I doing this? — the task's goal parentage">${esc(taskId.slice(0, 8))}…</a>`;
   return `<div class="cols">` +
     card(`Queued · ${b.queued.length}`, list(b.queued, (w) => `<tr><td>${esc(w.employee_id)}</td><td>${esc(w.reason)}</td><td>×${w.coalesced}</td></tr>`)) +
     card(`Running · ${b.running.length}`, list(b.running, (r) => `<tr><td>${esc(r.employee_id)}</td><td>${esc(r.run_id.slice(0, 8))}…</td><td>${esc(r.lease_expires_at ?? "—")}</td></tr>`)) +
-    card(`Blocked · ${b.blocked.length}`, list(b.blocked, (t) => `<tr><td>${esc(t.task_id.slice(0, 8))}…</td><td>${esc(t.intent_excerpt)}</td></tr>`)) + `</div>`;
+    card(`Blocked · ${b.blocked.length}`, list(b.blocked, (t) => `<tr><td>${whyLink(t.task_id)}</td><td>${esc(t.intent_excerpt)}</td></tr>`)) + `</div>` +
+    card("Why-chain", `<div id="why-out" class="clip">Click a task id — the chain reads leaf → parents → goal → company root.</div>`);
 }
 
 async function renderDelegation() {
@@ -382,6 +396,51 @@ function wireView() {
     await api2("POST", "/goals", { title: $("goal-title").value, level: $("goal-level").value });
     render();
   };
+  document.querySelectorAll(".why-link").forEach((link) => {
+    link.onclick = async (e) => {
+      e.preventDefault();
+      const taskId = link.dataset.task;
+      const [chain, thread] = await Promise.all([
+        api(`/tasks/${taskId}/why`), api(`/tasks/${taskId}/comments`),
+      ]);
+      $("why-out").innerHTML =
+        chain.map((l) => `<span class="pill">${esc(l.kind)}</span> ${esc(l.label)}`).join(" ← ") +
+        `<ol class="feed" style="margin-top:8px">${thread.map((c) => `<li><strong>${esc(c.author)}</strong> ${esc(c.body)}</li>`).join("")}</ol>` +
+        `<form id="comment-form" data-task="${esc(taskId)}"><input id="comment-body" placeholder="comment — the assignee's next beat reads it" required /><button>Comment</button></form>`;
+      $("comment-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        await api2("POST", `/tasks/${taskId}/comments`, { body: $("comment-body").value });
+        link.onclick(e);
+      };
+    };
+  });
+  document.querySelectorAll(".employee-act").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      await api2("POST", `/employees/${btn.dataset.employee}/${btn.dataset.act}`, {});
+      const lane = state.lanes.get(btn.dataset.employee);
+      if (lane) lane.status = btn.dataset.act === "pause" ? "paused" : "idle";
+      render();
+    };
+  });
+  document.querySelectorAll(".routine-act").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      try {
+        await api2("POST", `/routines/${btn.dataset.routine}/${btn.dataset.act}`, {});
+      } catch (err) {
+        // The engine's refusal is a feature (e.g. fire on a COALESCE routine already running) —
+        // show it, don't swallow it.
+        const note = $("routines-note");
+        if (note) note.textContent =
+          btn.dataset.act === "fire" && err.status === 409
+            ? "Did not fire — already running; the firing coalesced into the active run."
+            : `${btn.dataset.act} refused: ${err.message}`;
+        return;
+      }
+      render();
+    };
+  });
   const hire = $("hire-form");
   if (hire) hire.onsubmit = async (e) => {
     e.preventDefault();
@@ -400,7 +459,13 @@ function wireView() {
 const api2 = (method, path, body) =>
   fetch(`/v1/workspaces/${state.ctx.workspaceId}/companies/${state.ctx.companyId}${path}`, {
     method, headers: { Authorization: `Bearer ${state.ctx.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then((r) => { if (!r.ok) throw new Error(`${path} -> ${r.status}`); return r.json(); });
+  }).then(async (r) => {
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail;  // the door's typed refusal, when present
+      throw Object.assign(new Error(detail || `${path} -> ${r.status}`), { status: r.status });
+    }
+    return r.json();
+  });
 
 /* ================= the live architecture map (mirrors chorus-system-architecture-v2) ======= */
 function archSVG(c) {

@@ -19,6 +19,10 @@ from starlette.concurrency import run_in_threadpool
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies.service import get_company
 from podium.control._allocation import AllocationBoard
+from podium.control._comments import (
+    CommentView,
+    UndeliverableCommentError,
+)
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
 from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
@@ -28,10 +32,19 @@ from podium.control._observe import (
     OrgReport,
     SkillSummary,
     SpendRow,
+    UnknownTaskError,
+    WhyLink,
 )
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
+from podium.control._routines import (
+    RoutineFireConflict,
+    RoutineSummary,
+    UnknownRoutineError,
+)
 from podium.control._workforce import (
+    BudgetView,
     DuplicateEmployee,
+    EmployeeConflict,
     EmployeeView,
     UnknownEmployeeError,
     UnknownRole,
@@ -515,4 +528,250 @@ async def reject_plan(
         actor=actor,
         sessionmaker=sessionmaker,
         provider=provider,
+    )
+
+
+@router.get("/routines", response_model=list[RoutineSummary])
+async def routines(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[RoutineSummary]:
+    """The company's standing heartbeats — every routine hire provisioned, any status."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.routines.list(),
+    )
+
+
+async def _routine_action(
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+    act: Callable[[CompanyControlPlane], _T],
+) -> _T:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider, workspace_id=workspace_id, company_id=company_id, read=act
+        )
+    except UnknownRoutineError as exc:
+        raise HTTPException(status_code=404, detail="routine not found") from exc
+    except RoutineFireConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/routines/{routine_id}/pause", response_model=RoutineSummary)
+async def pause_routine(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> RoutineSummary:
+    return await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.pause(routine_id),
+    )
+
+
+@router.post("/routines/{routine_id}/resume", response_model=RoutineSummary)
+async def resume_routine(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> RoutineSummary:
+    return await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.resume(routine_id),
+    )
+
+
+@router.post("/routines/{routine_id}/fire")
+async def fire_routine_now(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> dict[str, str]:
+    """Fire the routine now through the engine's cron path; the conductor's pulse runs the task."""
+    task_id = await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.fire(routine_id),
+    )
+    return {"task_id": task_id}
+
+
+@router.get("/tasks/{task_id}/why", response_model=list[WhyLink])
+async def task_why(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[WhyLink]:
+    """The task's why-chain, leaf-first: task lineage, then goal lineage to the company root."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.why(task_id),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+
+
+class CommentCreate(BaseModel):
+    body: str
+
+
+@router.get("/tasks/{task_id}/comments", response_model=list[CommentView])
+async def task_comments(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[CommentView]:
+    """The task's comment thread, oldest first — shared context, not a private inbox."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.comments.thread(task_id),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+
+
+@router.post("/tasks/{task_id}/comments", status_code=201, response_model=CommentView)
+async def post_task_comment(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    body: CommentCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CommentView:
+    """The human joins the thread; delivery wakes whoever the task concerns."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    author = str(actor.user_id or actor.workspace_id)  # the authenticated actor, never client-supplied
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.comments.post(task_id, body=body.body, by_user=author),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except UndeliverableCommentError as exc:
+        raise HTTPException(status_code=409, detail="no one to notify on this task") from exc
+
+
+class BudgetPatch(BaseModel):
+    amount_cents: int
+
+
+async def _employee_action(
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+    act: Callable[[CompanyControlPlane], _T],
+) -> _T:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider, workspace_id=workspace_id, company_id=company_id, read=act
+        )
+    except UnknownEmployeeError as exc:
+        raise HTTPException(status_code=404, detail="employee not found") from exc
+    except EmployeeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/employees/{employee_id}/pause", response_model=EmployeeView)
+async def pause_employee(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    """Board control (OM-4): pause any employee — no new beat dispatches until resumed."""
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.pause(employee_id),
+    )
+
+
+@router.post("/employees/{employee_id}/resume", response_model=EmployeeView)
+async def resume_employee(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.resume(employee_id),
+    )
+
+
+@router.patch("/employees/{employee_id}/budget", response_model=BudgetView)
+async def patch_employee_budget(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    body: BudgetPatch,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> BudgetView:
+    """Board control (OM-4): the employee's monthly spend cap; the hard ceiling auto-stops."""
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.set_budget(employee_id, amount_cents=body.amount_cents),
     )

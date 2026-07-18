@@ -28,6 +28,10 @@ class UnknownEmployeeError(ValueError):
     """No such employee in this company."""
 
 
+class EmployeeConflict(ValueError):
+    """The employee is not in a state this action applies to (e.g. terminated)."""
+
+
 class EmployeeView(BaseModel):
     """One workforce member — the stable, serializable product shape of an engine employee."""
 
@@ -37,6 +41,18 @@ class EmployeeView(BaseModel):
     name: str
     role: str
     status: str  # engine EmployeeStatus value: pending|idle|active|running|…
+
+
+class BudgetView(BaseModel):
+    """The employee's spend cap — the ceiling that hard-stops (and auto-pauses) on breach."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scope_id: str
+    amount_cents: int
+    warn_percent: int
+    hard_stop_enabled: bool
+    window_kind: str
 
 
 class WorkforceFacade:
@@ -82,6 +98,67 @@ class WorkforceFacade:
             raise UnknownEmployeeError(employee_id)
         self._org().terminate(employee_id)
 
+    def pause(self, employee_id: str) -> EmployeeView:
+        """Pause the employee — invokability gates on PAUSED, so no new beat dispatches."""
+        return self._set_status(employee_id, paused=True)
+
+    def resume(self, employee_id: str) -> EmployeeView:
+        """Resume a paused employee back to idle; the next wake dispatches normally."""
+        return self._set_status(employee_id, paused=False)
+
+    def _set_status(self, employee_id: str, *, paused: bool) -> EmployeeView:
+        from chorus.workforce import EmployeeStatus
+
+        employee = self._ledger.employees.get(employee_id)
+        if employee is None:
+            raise UnknownEmployeeError(employee_id)
+        if employee.status is EmployeeStatus.TERMINATED:
+            raise EmployeeConflict(f"{employee_id} is terminated")
+        status = EmployeeStatus.PAUSED if paused else EmployeeStatus.IDLE
+        self._ledger.employees.set_status(employee_id, status)
+        refreshed = self._ledger.employees.get(employee_id)
+        assert refreshed is not None  # just written under the same RLS scope
+        return EmployeeView(
+            id=refreshed.id,
+            name=refreshed.name,
+            role=refreshed.role,
+            status=refreshed.status.value,
+        )
+
+    def set_budget(self, employee_id: str, *, amount_cents: int) -> BudgetView:
+        """Upsert the employee's monthly cost cap — the hard-stop ceiling stays enabled."""
+        import uuid as _uuid
+
+        from chorus.ledger import BudgetPolicy, BudgetScope
+
+        if self._ledger.employees.get(employee_id) is None:
+            raise UnknownEmployeeError(employee_id)
+        existing = self._ledger.budget_policies.find(
+            scope_type=BudgetScope.EMPLOYEE, scope_id=employee_id
+        )
+        if existing is not None:
+            self._ledger.budget_policies.set_amount(existing.id, amount_cents)
+        else:
+            self._ledger.budget_policies.create(
+                BudgetPolicy(
+                    id=str(_uuid.uuid4()),
+                    scope_type=BudgetScope.EMPLOYEE,
+                    scope_id=employee_id,
+                    amount=amount_cents,
+                )
+            )
+        policy = self._ledger.budget_policies.find(
+            scope_type=BudgetScope.EMPLOYEE, scope_id=employee_id
+        )
+        assert policy is not None  # just upserted under the same RLS scope
+        return BudgetView(
+            scope_id=policy.scope_id,
+            amount_cents=policy.amount,
+            warn_percent=policy.warn_percent,
+            hard_stop_enabled=policy.hard_stop_enabled,
+            window_kind=policy.window_kind,
+        )
+
     def export_bundle(self) -> dict[str, object]:
         """The portable workforce (spec 09 §3 fields) as one JSON bundle.
 
@@ -117,7 +194,9 @@ class WorkforceFacade:
 
 
 __all__ = [
+    "BudgetView",
     "DuplicateEmployee",
+    "EmployeeConflict",
     "EmployeeView",
     "UnknownEmployeeError",
     "UnknownRole",

@@ -35,4 +35,5 @@ class RunExecutor(Protocol):
         directive: str,
         is_canceled: CancelCheck,
         params: dict[str, Any] | None = None,
+        engine_task_id: str | None = None,
     ) -> ExecutionResult: ...

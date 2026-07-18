@@ -139,13 +139,18 @@ class CompanyGraphHost:
 
 _FORMATION_CONTRACT = (
     "This is a FORMATION directive: form the permanent organization for the objective below — "
-    "do NOT build the product yourself and do NOT write code. Call workforce_catalog_read "
-    "first, then submit exactly one complete typed workforce plan via workforce_plan_propose: "
-    "name each hire's profession from the catalog and its reporting line, and grant bounded "
-    "management authority — any lead expected to delegate work needs can_lead=true, "
-    "max_delegation_depth >= 1, and a max_team_size covering itself plus its reports. Keep "
-    "every budget allocation bounded. The plan stays pending for a human decision; never claim "
-    "anyone was hired. Then stop.\n\n## Objective\n"
+    "do NOT build the product yourself and do NOT write code. Process guidance (not acceptance "
+    "criteria): consult workforce_catalog_read for the valid professions, then submit one "
+    "complete typed workforce plan via workforce_plan_propose.\n\n"
+    "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
+    "contains one proposed plan in which every hire names a catalog profession, a reporting "
+    "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
+    "parser module' — leads later use these to pick assignees); any lead expected to delegate "
+    "holds a bounded management grant (can_lead=true, max_delegation_depth >= 1, max_team_size "
+    "covering itself plus its reports); every budget allocation is bounded; and "
+    "`governance-ledger.md` records the proposal line. Tool-call ordering is NOT observable "
+    "and is never an acceptance criterion. The plan stays pending for a human decision; never "
+    "claim anyone was hired. Then stop.\n\n## Objective\n"
 )
 
 
@@ -158,12 +163,21 @@ def _effective_directive(params: dict[str, Any], directive: str) -> str:
     return directive
 
 
-def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -> dict[str, Any]:
+def _submit_kwargs(
+    params: dict[str, Any],
+    *,
+    default_assignee: str,
+    ceo: str,
+    default_goal_id: str | None = None,
+) -> dict[str, Any]:
     """Map durable run params onto org.submit kwargs — one run resource, mode discriminates.
 
     params examples: {} (delivery via the default worker) · {"assignee": "bex"} ·
     {"execution_mode": "formation"} · {"execution_mode": "delegation", "lead": "backend_lead",
     "goal_id": "<goal uuid>", "max_team_size": 3, "spend_limit_cents": 500000}.
+
+    OM-2 why-chain: a goal-less delivery run is parented to ``default_goal_id`` (the company's
+    root goal) so every task answers "why am I doing this?"; formation serves no delivery goal.
     """
     mode = params.get("execution_mode")
     if mode == "formation":
@@ -171,7 +185,11 @@ def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -
         # typed proposal it leaves stays pending until a human hits the /plans doors.
         return {"assignee": ceo}
     if mode != "delegation":
-        return {"assignee": str(params.get("assignee") or default_assignee)}
+        delivery: dict[str, Any] = {"assignee": str(params.get("assignee") or default_assignee)}
+        goal_id = params.get("goal_id") or default_goal_id
+        if goal_id is not None:
+            delivery["goal_id"] = str(goal_id)
+        return delivery
     from chorus.ledger import ExecutionMode
 
     kwargs: dict[str, Any] = {
@@ -184,6 +202,36 @@ def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -
     if params.get("spend_limit_cents") is not None:
         kwargs["delegation_spend_limit_cents"] = int(params["spend_limit_cents"])
     return kwargs
+
+
+def _root_goal_id(ledger: Any) -> str | None:
+    """The company's first active root goal — the default "why" for goal-less delivery runs."""
+    for goal in ledger.goals.children(None):
+        if goal.status == "active":
+            return str(goal.id)
+    return None
+
+
+def _ensure_root_goal(ledger: Any, directive: str) -> str | None:
+    """Every company starts with its founder objective as the root goal (free-run #4).
+
+    Idempotent: an existing active root wins. The objective's first sentence is the title —
+    the why-chain's root is the founder's own words, never an invented label.
+    """
+    existing = _root_goal_id(ledger)
+    if existing is not None:
+        return existing
+    import re
+    import uuid as _uuid
+
+    from chorus.ledger import Goal
+
+    first_sentence = re.split(r"(?<=[.!?])\s", directive.strip(), maxsplit=1)[0]
+    title = first_sentence[:200] if first_sentence else directive[:200]
+    if not title:
+        return None
+    created = ledger.goals.create(Goal(id=str(_uuid.uuid4()), title=title))
+    return str(created.id)
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:
@@ -221,23 +269,40 @@ class ChorusRunExecutor:
         directive: str,
         is_canceled: CancelCheck,
         params: dict[str, Any] | None = None,
+        engine_task_id: str | None = None,
     ) -> ExecutionResult:
         import asyncio
         import itertools
 
         runtime = await self._host.ensure(company_id, workspace_id)
-        task = runtime.graph.org.submit(
-            _effective_directive(params or {}, directive),
-            **_submit_kwargs(params or {}, default_assignee=runtime.assignee, ceo=runtime.ceo),
-        )
+        if engine_task_id is not None:
+            # Reclaim (found live 2026-07-18): the run already submitted its engine root —
+            # re-submitting mints a duplicate that can self-accept over an empty subtree.
+            # Resume the watch on the recorded task instead.
+            task_id = engine_task_id
+        else:
+            if (params or {}).get("execution_mode") == "formation":
+                # Free-run #4: the founder objective becomes the root goal before the CEO ever
+                # beats — the review has a tree, and every later run inherits the "why".
+                _ensure_root_goal(runtime.graph.org._ledger, directive)
+            task = runtime.graph.org.submit(
+                _effective_directive(params or {}, directive),
+                **_submit_kwargs(
+                    params or {},
+                    default_assignee=runtime.assignee,
+                    ceo=runtime.ceo,
+                    default_goal_id=_root_goal_id(runtime.graph.org._ledger),
+                ),
+            )
+            task_id = task.id
         await self._host.attach_run(
-            runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
+            runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
         budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
         for _ in budget:
             if await is_canceled():
                 return ExecutionResult(status=RunStatus.CANCELED)
-            current = runtime.graph.org._ledger.tasks.get(task.id)
+            current = runtime.graph.org._ledger.tasks.get(task_id)
             if current is not None and current.status in _TERMINAL:
                 mapped = _TERMINAL[current.status]
                 error = "task rejected" if mapped is RunStatus.FAILED else None

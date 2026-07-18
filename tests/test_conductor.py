@@ -6,6 +6,7 @@ under test. The real ChorusRunExecutor is covered by the skippable integration e
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -45,6 +46,7 @@ class _FakeExecutor:
         directive: str,
         is_canceled: CancelCheck,
         params=None,
+        engine_task_id=None,
     ) -> ExecutionResult:
         if self._on_execute is not None:
             await self._on_execute()
@@ -291,6 +293,63 @@ def test_submit_kwargs_maps_delegation_params() -> None:
     }
 
 
+def test_delivery_runs_default_to_the_company_root_goal() -> None:
+    """OM-2: every task answers "why am I doing this?" — a goal-less delivery run is parented
+    to the company's root goal at the door; an explicit goal always wins; formation forms the
+    org and serves no delivery goal."""
+    from podium.conductor._chorus_executor import _submit_kwargs
+
+    kw = dict(default_assignee="ace", ceo="casey")
+    assert _submit_kwargs({}, **kw, default_goal_id="g-root") == {
+        "assignee": "ace",
+        "goal_id": "g-root",
+    }
+    assert _submit_kwargs({"goal_id": "g-x"}, **kw, default_goal_id="g-root") == {
+        "assignee": "ace",
+        "goal_id": "g-x",
+    }
+    assert _submit_kwargs({"execution_mode": "formation"}, **kw, default_goal_id="g-root") == {
+        "assignee": "casey"
+    }
+    # No goals seeded yet — the run still flows, just goal-less (the pre-OM-2 behavior).
+    assert _submit_kwargs({}, **kw, default_goal_id=None) == {"assignee": "ace"}
+
+
+def test_formation_seeds_the_root_goal_from_the_founder_objective() -> None:
+    """Free-run checklist #4: every company starts with its founder objective as the root goal —
+    the why-chain needs a root, and the executive review needs a tree to review. Idempotent:
+    a company that already has a root goal is left untouched."""
+
+    class _Goals:
+        def __init__(self, roots: list[object]) -> None:
+            self._roots = roots
+            self.created: list[object] = []
+
+        def children(self, parent_id: object) -> list[object]:
+            assert parent_id is None
+            return self._roots
+
+        def create(self, goal: object) -> object:
+            self.created.append(goal)
+            return goal
+
+    class _Ledger:
+        def __init__(self, roots: list[object]) -> None:
+            self.goals = _Goals(roots)
+
+    from podium.conductor._chorus_executor import _ensure_root_goal
+
+    empty = _Ledger([])
+    goal_id = _ensure_root_goal(empty, "Build linkport — a link-in-bio tool.")  # type: ignore[arg-type]
+    assert goal_id is not None
+    assert len(empty.goals.created) == 1
+    assert "linkport" in empty.goals.created[0].title  # the objective IS the goal
+
+    seeded = _Ledger([type("G", (), {"id": "g-root", "status": "active"})()])
+    assert _ensure_root_goal(seeded, "anything") == "g-root"  # type: ignore[arg-type]
+    assert seeded.goals.created == []
+
+
 def test_formation_directive_carries_the_formation_contract() -> None:
     """Live 2026-07-18: 'make an AI notetaker app' in formation mode reached the CEO raw and
     she built the product herself. The product injects the formation contract server-side."""
@@ -318,3 +377,56 @@ def test_executor_max_ticks_comes_from_settings() -> None:
     )
     conductor, _close = build_conductor(settings)
     assert conductor._executor._max_ticks == 240
+
+
+async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
+    """Found live 2026-07-18 (videocursor): a server restart reclaimed a running delegation
+    run and execute() re-submitted a SECOND engine root — which self-accepted over an empty
+    subtree and marked the run succeeded while the real root sat stranded. The run row already
+    carries engine_task_id; a reclaim must resume the watch on it, never submit again."""
+    from types import SimpleNamespace
+
+    from chorus.ledger import TaskStatus
+
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
+
+    def _forbidden_submit(*_a: object, **_k: object) -> object:
+        raise AssertionError("reclaim must not re-submit the directive")
+
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(
+            org=SimpleNamespace(
+                submit=_forbidden_submit,
+                _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: done_task)),
+            )
+        ),
+        assignee="ace",
+        ceo="casey",
+    )
+    attached: list[str] = []
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str) -> None:
+            attached.append(engine_task_id)
+
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+    assert result.status == RunStatus.SUCCEEDED
+    assert attached == ["task-1"]  # the mirror re-registers, so events keep routing
