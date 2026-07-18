@@ -16,12 +16,13 @@ Last run: iteration 6 — 2026-07-18 ~17:15
 
 ## High priority (act) — the user's five-item checklist drives everything now
 
-1. HOOKS: org layer v1 shipped (chorus.hooks, delegatory message hook). NEXT: consume the
-   background research agent's hook-event table; add child-rejected/budget-warn/task-assigned
-   hooks; consider activating dream's dormant beat-level hooks from the chorus factory.
-2. LEAN BRIEFS (P1): rewrite role briefs in principled Codex style (persona/communication/
-   autonomy, no procedural hardcode); start with DELEGATION_BRIEF + backend engineer; verify
-   live on videocursor beats. Research agent covers best practice.
+1. HOOKS: org layer v1 shipped (chorus.hooks). Research LANDED →
+   docs/plans/2026-07-18-hooks-and-briefs-research.md — READ IT FIRST each iteration.
+   Build queue: H2 pre-dispatch validation, H3 routine durable-next-path stop-gate,
+   H4 budget-ceiling auto-pause check, H5 onboarding beat, H6 typed human interactions.
+2. LEAN BRIEFS (P1): anatomy + placement rules in the research doc (<600 tokens/brief;
+   prohibitions→gates because omission constraints decay). Start: DELEGATION_BRIEF +
+   backend_engineer brief; verify live on videocursor.
 3. SMOOTHER DELEGATION: v2 proved verbatim-module briefs + depends_on work — encode those as
    engine affordances (decompose refusal teaching, default child-brief scaffold), not prompt
    ritual.
