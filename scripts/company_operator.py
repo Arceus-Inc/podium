@@ -283,6 +283,32 @@ class Operator:
                 self._expansion_inflight = False
             await asyncio.sleep(30)
 
+    def brief_for_title(self, title: str) -> str:
+        base = title.split(" (v")[0]
+        for t, b in ROADMAP:
+            if t == base:
+                return b
+        return (f"Deliver '{title}' to a high, tested standard. Ship runnable npm scripts and "
+                "unit + e2e tests with captured evidence.")
+
+    def rehydrate_goals(self) -> None:
+        # Restart-safety: rebuild goal_runs from the sqlite tracker so a relaunch resumes the same
+        # goals/runs instead of creating duplicates.
+        assert self.db is not None
+        rows = self.db.execute("SELECT goal_id,title,status FROM goals").fetchall()
+        for gid, title, gstatus in rows:
+            r = self.db.execute(
+                "SELECT run_id,status FROM runs WHERE goal_id=? AND kind='delegation' "
+                "ORDER BY updated_at DESC LIMIT 1", (gid,)).fetchone()
+            run_id, rstatus = (r[0], r[1]) if r else (None, None)
+            self.goal_runs[gid] = {"title": title, "brief": self.brief_for_title(title),
+                                   "run_id": run_id, "lead": None,
+                                   "status": rstatus or gstatus or "pending"}
+        known = {i["title"].split(" (v")[0] for i in self.goal_runs.values()}
+        self._roadmap_i = sum(1 for t, _ in ROADMAP if t in known)
+        if self.goal_runs:
+            self.log(f"rehydrated {len(self.goal_runs)} goals from tracker")
+
     def next_roadmap_item(self) -> tuple[str, str]:
         title, brief = ROADMAP[self._roadmap_i % len(ROADMAP)]
         cycled = self._roadmap_i >= len(ROADMAP)
@@ -326,10 +352,11 @@ class Operator:
                             self.log(f"goal '{info['title'][:40]}' finished ({st['status']})")
                 active = [i for i in self.goal_runs.values()
                           if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                running = [i for i in active if i.get("run_id")]
                 # launch delegation runs for goals that have none yet and a lead is available
                 if leads:
                     for gid, info in self.goal_runs.items():
-                        if info.get("run_id") is None and len(active) < MAX_ACTIVE_GOALS:
+                        if info.get("run_id") is None and len(running) < MAX_ACTIVE_GOALS:
                             lead = leads[lead_rr % len(leads)]
                             lead_rr += 1
                             rid = await self.submit_run("delegation", info["brief"], goal_id=gid,
@@ -338,7 +365,7 @@ class Operator:
                                 info["run_id"] = rid
                                 info["lead"] = lead["id"]
                                 info["status"] = "running"
-                                active.append(info)
+                                running.append(info)
             except Exception as e:  # noqa: BLE001
                 self.log(f"delegation_daemon: {e}\n{traceback.format_exc()}", "warn")
             await asyncio.sleep(20)
@@ -454,9 +481,18 @@ class Operator:
         self.http = httpx.AsyncClient(base_url=BASE, timeout=30.0)
         self.pg = await asyncpg.create_pool(LEDGER_DSN, min_size=1, max_size=4)
         await self.ensure_company()
+        self.rehydrate_goals()
+        # if the company already has a real org, it's founded (growth may proceed on restart)
+        try:
+            org0 = await self.org()
+            if len([e for e in org0["employees"] if e["status"] != "terminated"]) > 1:
+                self._founded = True
+        except Exception:  # noqa: BLE001
+            pass
         self.log(f"MISSION: {MISSION[:80]}…")
-        # kick off formation for the founding org
-        await self.submit_run("formation", MISSION)
+        # kick off formation for the founding org (only for a genuinely fresh company)
+        if not self.goal_runs and not self._founded:
+            await self.submit_run("formation", MISSION)
         # daemons
         tasks = [
             asyncio.create_task(self.approvals_daemon()),
