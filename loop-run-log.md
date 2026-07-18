@@ -62,3 +62,22 @@ commits) → what ran → outcome → spend.
   errors, silently abandons the rest of the file → TAVILY_API_KEY never exported. The boot
   script now parses KEY=VALUE lines verbatim (podium 00531ad); all 4 key groups verified set.
 - **Ran**: stack restarted with full env after the lead's beat finished; recovery resumes.
+
+## Iteration 4 — 2026-07-18 ~15:50 (the big one)
+
+- **Observed (videocursor)**: podium run "succeeded" FALSELY. Chain: real root exhausted its
+  integrate cap → engine correctly opened a `stranded` recovery — but the restart's reclaim
+  re-ran execute() and SUBMITTED A DUPLICATE delegation root; the duplicate's kickoff beat
+  "passed" its in-beat evaluation (praising the fe module in the shared worktree) without ever
+  decomposing, and completed through the delivery path: zero children, contract never verified.
+- **Changed**:
+  - podium 068673d — RunRef carries engine_task_id; a reclaimed run RESUMES the watch on its
+    recorded root (re-attaching the mirror), never re-submits.
+  - chorus 0d4e5e2 — a delegation root whose beat passes with zero children parks BLOCKED and
+    re-wakes the lead to decompose; it can never land done through the delivery path.
+- **Ran**: podium full suite green (24); heartbeat suite green except the 2 known pre-existing
+  failures (confirmed on clean tree); ruff+mypy clean both repos. Stack restarted on the fixes.
+- **Live action**: retired the exhausted round (false-done duplicate + stranded root + rejected
+  children cancelled, recovery resolved); kicked delegation v2 (run 019f74a6-83a6…) with
+  verbatim per-IC module briefs, depends_on ordering (marketer after analyst), findings.md
+  named for the analyst, and explicit corrective-dispatch instruction. Web tools now live.
