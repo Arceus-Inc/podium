@@ -86,6 +86,9 @@ class CompanyGraphHost:
                 workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
                 company_id=str(company_id),
                 ledger_dsn=self._engine_ledger_dsn,
+                # A real company runs many teams at once; the default (3) serialises an 18-person
+                # org down to a trickle and starves delegated beats. Give the heartbeat room.
+                max_concurrent_runs=16,
             )
         )
         # The CEO is the one always-present seat: formation routes here to propose the real
@@ -152,7 +155,7 @@ class CompanyGraphHost:
             path = self._workdir / str(company_id) / "direction-report.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(runtime.graph.horizon.report(), encoding="utf-8")
-        except OSError:
+        except Exception:  # noqa: BLE001 -- a report that can't be written must never fail a run
             logger.warning("direction_report_write_failed", company_id=str(company_id))
 
     async def aclose(self) -> None:

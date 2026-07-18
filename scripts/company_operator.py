@@ -37,6 +37,7 @@ DB_FILE = OUT / "operator.db"
 STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
+MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
 MAX_ACTIVE_GOALS = int(os.environ.get("OPERATOR_MAX_ACTIVE_GOALS", "3"))
 DELEGATION_SPEND_LIMIT_CENTS = 5_000_000  # generous per-goal budget
 
@@ -223,11 +224,22 @@ class Operator:
         while True:
             try:
                 plans = await self.api("GET", "/plans")
+                headcount = None
+                if plans:
+                    org = await self.org()
+                    headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
                 for p in plans or []:
                     if p.get("status") == "proposed" and p["id"] not in self._approved_plans:
-                        self._approved_plans.add(p["id"])
                         emps = len(p.get("employees", []))
                         grants = sum(1 for g in p.get("grants", []) if g.get("can_lead"))
+                        # Cap the org: once large enough, stop approving plans that ADD headcount
+                        # (leave them proposed) so the company doesn't balloon indefinitely.
+                        if headcount is not None and headcount >= MAX_HEADCOUNT and emps > 0:
+                            self._approved_plans.add(p["id"])
+                            self._expansion_inflight = False
+                            self.log(f"skip plan {p['id'][:8]} — headcount {headcount} >= max {MAX_HEADCOUNT}")
+                            continue
+                        self._approved_plans.add(p["id"])
                         try:
                             await self.api("POST", f"/plans/{p['id']}/approve")
                             kind = "amendment" if p.get("revision", 1) > 1 or emps <= 2 else "formation"
@@ -266,6 +278,11 @@ class Operator:
                 org = await self.org()
                 headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
                 open_reqs = [r for r in org["staffing"] if str(r["status"]).lower() == "open"]
+                if headcount >= MAX_HEADCOUNT:
+                    # at the hard cap — any expansion plan will be rejected on approval, so
+                    # don't waste formation beats churning against the ceiling.
+                    await asyncio.sleep(30)
+                    continue
                 if headcount < TARGET_HEADCOUNT or open_reqs:
                     self._expansion_inflight = True
                     directive = (
@@ -273,10 +290,13 @@ class Operator:
                         f"mission and roadmap. Current permanent headcount is {headcount}; the "
                         f"company should be about {TARGET_HEADCOUNT} people. Propose amendments that "
                         "satisfy EVERY open staffing request (use each staffing_request_id), and add "
-                        "the specialists and leads the roadmap needs so several teams can work in "
-                        "parallel: design, frontend, backend, product/PM, QA/analyst, and marketing, "
-                        "each substantial discipline under its own lead (a bounded management grant). "
-                        "Keep the org non-flat and at most two layers below the CEO."
+                        "the ICs the roadmap needs so several teams can work in parallel across "
+                        "design, frontend, backend, product/PM, QA/analyst, and marketing. Build a "
+                        "real pyramid: keep FEW leads (one per discipline, ~3-5 total) and add the "
+                        "new hires as ICs REPORTING TO the existing discipline lead for their "
+                        "profession — do NOT create additional leads for a discipline that already "
+                        "has one, and NEVER leave an IC reporting to the CEO. Only the leads report "
+                        "to the CEO. Keep the org non-flat and at most two layers below the CEO."
                     )
                     await self.submit_run("formation", directive)
                     # wait (up to ~150s) for the approval daemon to clear the flag, else clear it
