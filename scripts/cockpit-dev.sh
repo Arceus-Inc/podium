@@ -19,9 +19,16 @@ PG_BIN="${PG_BIN:-$(ls -d /opt/homebrew/opt/postgresql@*/bin 2>/dev/null | sort 
 [ -x "$PG_BIN/postgres" ] || { echo "postgres not found (set PG_BIN)"; exit 1; }
 
 # --- LLM keys (required: the conductor refuses beats without a model) -----------------------
+# Parse KEY=VALUE lines verbatim instead of `source`: a value like `Name <mail@x>` makes the
+# shell see a redirect, error, and silently abandon the REST of the file — found live when
+# TAVILY_API_KEY (after such a line) never reached the server and every web_search failed.
 if [ -f "$KEYS_ENV" ]; then
-    # errexit off while sourcing: a malformed trailing line in .env must not abort the boot
-    set +e; set -a; source "$KEYS_ENV" 2>/dev/null; set +a; set -e
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in \#*|'') continue ;; esac
+        case "$line" in
+            [A-Za-z_]*=*) export "${line%%=*}=${line#*=}" 2>/dev/null || true ;;
+        esac
+    done < "$KEYS_ENV"
 fi
 [ -n "${AZURE_OPENAI_API_KEY:-}" ] || { echo "AZURE_OPENAI_API_KEY missing (set KEYS_ENV or export it)"; exit 1; }
 
