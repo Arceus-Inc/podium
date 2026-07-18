@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from podium.auth import _models as auth  # noqa: F401
 from podium.companies import models as companies  # noqa: F401
-from podium.conductor import models as conductor  # noqa: F401
 from podium.events import models as events  # noqa: F401
 from podium.runs import models as runs  # noqa: F401
 from podium.users import models as users  # noqa: F401

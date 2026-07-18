@@ -5,7 +5,3 @@ over every component: horizon direction, chorus org/beats, dream harness telemet
 lattice's two memory pillars (semantic atoms + procedural skills). Visibility only for
 internal components — control stays behind podium's governed doors.
 """
-
-from cockpit.company import CompanyConfig, CompanyGraph, build
-
-__all__ = ["CompanyConfig", "CompanyGraph", "build"]
