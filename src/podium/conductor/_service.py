@@ -123,6 +123,7 @@ class Conductor:
                 directive=ref.directive,
                 params=ref.params,
                 is_canceled=is_canceled,
+                engine_task_id=ref.engine_task_id,
             )
         except Exception as exc:  # executor failure is a failed run, not a dead worker
             _log.exception("run_execution_failed", run_id=ref.id)

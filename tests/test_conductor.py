@@ -6,6 +6,8 @@ under test. The real ChorusRunExecutor is covered by the skippable integration e
 
 from __future__ import annotations
 
+import uuid
+
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -45,6 +47,7 @@ class _FakeExecutor:
         directive: str,
         is_canceled: CancelCheck,
         params=None,
+        engine_task_id=None,
     ) -> ExecutionResult:
         if self._on_execute is not None:
             await self._on_execute()
@@ -375,3 +378,56 @@ def test_executor_max_ticks_comes_from_settings() -> None:
     )
     conductor, _close = build_conductor(settings)
     assert conductor._executor._max_ticks == 240
+
+
+async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
+    """Found live 2026-07-18 (videocursor): a server restart reclaimed a running delegation
+    run and execute() re-submitted a SECOND engine root — which self-accepted over an empty
+    subtree and marked the run succeeded while the real root sat stranded. The run row already
+    carries engine_task_id; a reclaim must resume the watch on it, never submit again."""
+    from types import SimpleNamespace
+
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    from chorus.ledger import TaskStatus
+
+    done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
+
+    def _forbidden_submit(*_a: object, **_k: object) -> object:
+        raise AssertionError("reclaim must not re-submit the directive")
+
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(
+            org=SimpleNamespace(
+                submit=_forbidden_submit,
+                _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: done_task)),
+            )
+        ),
+        assignee="ace",
+        ceo="casey",
+    )
+    attached: list[str] = []
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str) -> None:
+            attached.append(engine_task_id)
+
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+    assert result.status == RunStatus.SUCCEEDED
+    assert attached == ["task-1"]  # the mirror re-registers, so events keep routing

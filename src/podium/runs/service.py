@@ -28,6 +28,9 @@ class RunRef:
     company_id: uuid.UUID
     directive: str
     params: dict[str, object] = field(default_factory=dict)
+    # Set on a run that already submitted its engine root — a reclaim resumes the watch on it
+    # instead of re-submitting (found live 2026-07-18: a restart minted a duplicate root).
+    engine_task_id: str | None = None
 
 
 def _now() -> datetime:
@@ -163,14 +166,20 @@ async def request_cancel(session: AsyncSession, run_id: uuid.UUID) -> bool:
 async def queued_run_refs(session: AsyncSession, *, limit: int) -> list[RunRef]:
     """Queued runs awaiting a worker, oldest first. Cross-tenant — for the conductor's control-plane."""
     stmt = (
-        select(Run.id, Run.workspace_id, Run.company_id, Run.directive, Run.params)
+        select(
+            Run.id, Run.workspace_id, Run.company_id, Run.directive, Run.params,
+            Run.engine_task_id,
+        )
         .where(Run.status == RunStatus.QUEUED)
         .order_by(Run.created_at)
         .limit(limit)
     )
     rows = (await session.execute(stmt)).all()
     return [
-        RunRef(id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3], params=r[4] or {})
+        RunRef(
+            id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3], params=r[4] or {},
+            engine_task_id=r[5],
+        )
         for r in rows
     ]
 

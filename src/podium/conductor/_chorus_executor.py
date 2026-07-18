@@ -269,32 +269,40 @@ class ChorusRunExecutor:
         directive: str,
         is_canceled: CancelCheck,
         params: dict[str, Any] | None = None,
+        engine_task_id: str | None = None,
     ) -> ExecutionResult:
         import asyncio
         import itertools
 
         runtime = await self._host.ensure(company_id, workspace_id)
-        if (params or {}).get("execution_mode") == "formation":
-            # Free-run #4: the founder objective becomes the root goal before the CEO ever
-            # beats — the review has a tree, and every later run inherits the "why".
-            _ensure_root_goal(runtime.graph.org._ledger, directive)
-        task = runtime.graph.org.submit(
-            _effective_directive(params or {}, directive),
-            **_submit_kwargs(
-                params or {},
-                default_assignee=runtime.assignee,
-                ceo=runtime.ceo,
-                default_goal_id=_root_goal_id(runtime.graph.org._ledger),
-            ),
-        )
+        if engine_task_id is not None:
+            # Reclaim (found live 2026-07-18): the run already submitted its engine root —
+            # re-submitting mints a duplicate that can self-accept over an empty subtree.
+            # Resume the watch on the recorded task instead.
+            task_id = engine_task_id
+        else:
+            if (params or {}).get("execution_mode") == "formation":
+                # Free-run #4: the founder objective becomes the root goal before the CEO ever
+                # beats — the review has a tree, and every later run inherits the "why".
+                _ensure_root_goal(runtime.graph.org._ledger, directive)
+            task = runtime.graph.org.submit(
+                _effective_directive(params or {}, directive),
+                **_submit_kwargs(
+                    params or {},
+                    default_assignee=runtime.assignee,
+                    ceo=runtime.ceo,
+                    default_goal_id=_root_goal_id(runtime.graph.org._ledger),
+                ),
+            )
+            task_id = task.id
         await self._host.attach_run(
-            runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
+            runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
         budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
         for _ in budget:
             if await is_canceled():
                 return ExecutionResult(status=RunStatus.CANCELED)
-            current = runtime.graph.org._ledger.tasks.get(task.id)
+            current = runtime.graph.org._ledger.tasks.get(task_id)
             if current is not None and current.status in _TERMINAL:
                 mapped = _TERMINAL[current.status]
                 error = "task rejected" if mapped is RunStatus.FAILED else None
