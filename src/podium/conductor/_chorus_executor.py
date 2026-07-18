@@ -44,7 +44,7 @@ _TERMINAL: dict[TaskStatus, RunStatus] = {
 @dataclass
 class _CompanyRuntime:
     graph: CompanyGraph
-    assignee: str
+    assignee: str  # default delivery fallback = the CEO seat; no fake IC is pre-seeded
     ceo: str  # formation runs route here — the one employee with governance tools
     mirror: EventMirror
     ingest: EventIngest
@@ -88,12 +88,10 @@ class CompanyGraphHost:
                 ledger_dsn=self._engine_ledger_dsn,
             )
         )
-        # ponytail: one hardcoded worker to make runs executable; the CEO's approved workforce
-        # plan materializes the real org. Idempotent: a saga retry (built, idle-flip failed)
-        # finds both already hired in the engine store.
-        worker = graph.org._ledger.employees.get("ace") or graph.org.hire(
-            name="Ace", role="backend_engineer"
-        )
+        # The CEO is the one always-present seat: formation routes here to propose the real
+        # workforce, and an unassigned delivery run falls back here (the buck stops at the CEO)
+        # until an approved org exists. No fake IC is pre-seeded — a hardcoded "ace" made the org
+        # look staffed when it was not. Idempotent: a saga retry finds casey already hired.
         ceo = graph.org._ledger.employees.get("casey") or graph.org.hire(name="Casey", role="ceo")
         mirror = EventMirror(
             self._app_sm,
@@ -112,7 +110,7 @@ class CompanyGraphHost:
         horizon_stop = graph.horizon.start()
         runtime = _CompanyRuntime(
             graph=graph,
-            assignee=worker.name,
+            assignee=ceo.name,  # unassigned delivery stops at the CEO — no fake IC seeded
             ceo=ceo.name,
             mirror=mirror,
             ingest=ingest,
@@ -174,9 +172,11 @@ _FORMATION_CONTRACT = (
     "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
     "contains one proposed plan in which every hire names a catalog profession, a reporting "
     "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
-    "parser module' — leads later use these to pick assignees); any lead expected to delegate "
-    "holds a bounded management grant (can_lead=true, max_delegation_depth >= 1, max_team_size "
-    "covering itself plus its reports); every budget allocation is bounded; and "
+        "parser module' — leads later use these to pick assignees); the org is NOT flat — when the "
+        "objective needs more than one specialist, at least one hire holds a bounded management "
+        "grant (can_lead=true, max_delegation_depth >= 1, max_team_size covering itself plus its "
+        "reports) and the other hires report to that lead rather than to the CEO; every budget "
+        "allocation is bounded; and "
     "`governance-ledger.md` records the proposal line. Tool-call ordering is NOT observable "
     "and is never an acceptance criterion. The plan stays pending for a human decision; never "
     "claim anyone was hired. Then stop.\n\n## Objective\n"
