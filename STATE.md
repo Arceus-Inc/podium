@@ -42,3 +42,12 @@ Last run: iteration 6 — 2026-07-18 ~17:15
 ## Recent noise (ignored)
 
 - Pyright cross-repo import diagnostics in the editor — environment mismatch, not real.
+
+## Design decision (operator dialogue, it.9)
+
+- Evidence protocol RATIONALE: self-graded agents false-done (live receipts: vacuous root
+  pass, links.js export mismatch). Keep forever: kernel-run objective test floor + cheap
+  independent review. Make the RED ratchet a TRUST DIAL, not a default: strict for new/
+  recently-failing employees, floor+review once lattice shows a verified track record,
+  rejection knocks trust back. Plug point = the EvidenceProtocol object (agent in flight).
+  QUEUED: trust-tiered evidence after the protocol refactor merges.
