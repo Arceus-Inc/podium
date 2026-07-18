@@ -291,6 +291,28 @@ def test_submit_kwargs_maps_delegation_params() -> None:
     }
 
 
+def test_delivery_runs_default_to_the_company_root_goal() -> None:
+    """OM-2: every task answers "why am I doing this?" — a goal-less delivery run is parented
+    to the company's root goal at the door; an explicit goal always wins; formation forms the
+    org and serves no delivery goal."""
+    from podium.conductor._chorus_executor import _submit_kwargs
+
+    kw = dict(default_assignee="ace", ceo="casey")
+    assert _submit_kwargs({}, **kw, default_goal_id="g-root") == {
+        "assignee": "ace",
+        "goal_id": "g-root",
+    }
+    assert _submit_kwargs({"goal_id": "g-x"}, **kw, default_goal_id="g-root") == {
+        "assignee": "ace",
+        "goal_id": "g-x",
+    }
+    assert _submit_kwargs({"execution_mode": "formation"}, **kw, default_goal_id="g-root") == {
+        "assignee": "casey"
+    }
+    # No goals seeded yet — the run still flows, just goal-less (the pre-OM-2 behavior).
+    assert _submit_kwargs({}, **kw, default_goal_id=None) == {"assignee": "ace"}
+
+
 def test_formation_directive_carries_the_formation_contract() -> None:
     """Live 2026-07-18: 'make an AI notetaker app' in formation mode reached the CEO raw and
     she built the product herself. The product injects the formation contract server-side."""

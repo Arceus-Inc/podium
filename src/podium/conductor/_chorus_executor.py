@@ -158,12 +158,21 @@ def _effective_directive(params: dict[str, Any], directive: str) -> str:
     return directive
 
 
-def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -> dict[str, Any]:
+def _submit_kwargs(
+    params: dict[str, Any],
+    *,
+    default_assignee: str,
+    ceo: str,
+    default_goal_id: str | None = None,
+) -> dict[str, Any]:
     """Map durable run params onto org.submit kwargs — one run resource, mode discriminates.
 
     params examples: {} (delivery via the default worker) · {"assignee": "bex"} ·
     {"execution_mode": "formation"} · {"execution_mode": "delegation", "lead": "backend_lead",
     "goal_id": "<goal uuid>", "max_team_size": 3, "spend_limit_cents": 500000}.
+
+    OM-2 why-chain: a goal-less delivery run is parented to ``default_goal_id`` (the company's
+    root goal) so every task answers "why am I doing this?"; formation serves no delivery goal.
     """
     mode = params.get("execution_mode")
     if mode == "formation":
@@ -171,7 +180,11 @@ def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -
         # typed proposal it leaves stays pending until a human hits the /plans doors.
         return {"assignee": ceo}
     if mode != "delegation":
-        return {"assignee": str(params.get("assignee") or default_assignee)}
+        delivery: dict[str, Any] = {"assignee": str(params.get("assignee") or default_assignee)}
+        goal_id = params.get("goal_id") or default_goal_id
+        if goal_id is not None:
+            delivery["goal_id"] = str(goal_id)
+        return delivery
     from chorus.ledger import ExecutionMode
 
     kwargs: dict[str, Any] = {
@@ -184,6 +197,14 @@ def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -
     if params.get("spend_limit_cents") is not None:
         kwargs["delegation_spend_limit_cents"] = int(params["spend_limit_cents"])
     return kwargs
+
+
+def _root_goal_id(ledger: Any) -> str | None:
+    """The company's first active root goal — the default "why" for goal-less delivery runs."""
+    for goal in ledger.goals.children(None):
+        if goal.status == "active":
+            return str(goal.id)
+    return None
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:
@@ -228,7 +249,12 @@ class ChorusRunExecutor:
         runtime = await self._host.ensure(company_id, workspace_id)
         task = runtime.graph.org.submit(
             _effective_directive(params or {}, directive),
-            **_submit_kwargs(params or {}, default_assignee=runtime.assignee, ceo=runtime.ceo),
+            **_submit_kwargs(
+                params or {},
+                default_assignee=runtime.assignee,
+                ceo=runtime.ceo,
+                default_goal_id=_root_goal_id(runtime.graph.org._ledger),
+            ),
         )
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
