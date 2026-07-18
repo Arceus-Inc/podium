@@ -132,3 +132,20 @@ commits) → what ran → outcome → spend.
 - Next: H2 pre-dispatch validation, H3 routine durable-next-path gate, H4 budget auto-pause
   check, H5 onboarding beat, H6 typed interactions; then designer/marketer/pm brief pass;
   mind-map doc; e2e round 3.
+
+## Iteration 8 — 2026-07-18 ~18:00 (H2, operator-redirected mid-build)
+
+- **Operator design input (live)**: "why block? the agent should work without web search."
+  Correct — blocking is only for beats that cannot run at all. Redirected the in-flight agent
+  from a dispatch gate to DEGRADE-DON'T-BLOCK.
+- **Built (chorus c71db66 / 6bfa112, worktree agent)**: chorus_harness/_env_capabilities.py —
+  at materialize, a tool whose required env is missing (v1: web_search/web_extract without a
+  Tavily key) is DROPPED from the registry/config (flows into overlays + subagent projection)
+  and the brief gains one disclosure line ("ground claims in repo artifacts; don't invent
+  citations"). No recovery actions, no blocked beats. Empirical vindication: the agent's own
+  full-suite run with the original blocking gate broke two review tests in key-less envs.
+- **Tests**: 3 new (no-key drop+note / key present untouched / non-web role untouched);
+  harness suite 19 green; ruff+mypy clean. No restart needed now (our server HAS the key —
+  this is resilience for other deploys); rides the next restart.
+- Next: H3 routine durable-next-path gate, H5 onboarding beat, H6 typed interactions;
+  remaining brief passes (designer/marketer/pm); mind-map; e2e round 3.
