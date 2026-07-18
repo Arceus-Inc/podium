@@ -26,7 +26,7 @@ from horizon.generation import ProposalStore
 from horizon.governance import HorizonGovernance
 from horizon.store import DecisionStore, StrategyStore
 
-from cockpit.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
+from podium.conductor.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
 
 
 @dataclass(frozen=True)

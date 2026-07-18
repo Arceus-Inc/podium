@@ -21,11 +21,11 @@ from typing import Any
 from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cockpit.company import CompanyConfig, CompanyGraph, build
 from podium.companies import mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
+from podium.conductor.company import CompanyConfig, CompanyGraph, build
 from podium.db import tenant_session
 from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id

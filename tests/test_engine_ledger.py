@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cockpit.company import CompanyConfig, build
+from podium.conductor.company import CompanyConfig, build
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
