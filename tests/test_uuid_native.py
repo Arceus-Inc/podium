@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import create_api_key
 from podium.companies import create_company
+from podium.conductor import enqueue_command
 from podium.db import tenant_session
 from podium.runs import create_run
 from podium.users import create_user
@@ -58,7 +59,8 @@ async def test_every_entity_id_is_a_db_minted_uuid7(
         run, _ = await create_run(
             s, workspace_id=ws_id, company_id=company_id, directive="d", idempotency_key="k"
         )
-        minted += [run.id]
+        command = await enqueue_command(s, workspace_id=ws_id, company_id=company_id, type="cancel")
+        minted += [run.id, command.id]
     for value in minted:
         assert isinstance(value, uuid.UUID), f"expected uuid.UUID, got {type(value)}: {value!r}"
         assert value.version == 7  # DB-minted uuidv7 — time-ordered, never random-v4

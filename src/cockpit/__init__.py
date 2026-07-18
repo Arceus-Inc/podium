@@ -5,3 +5,7 @@ harness telemetry, and lattice's two memory pillars (semantic atoms + procedural
 Visibility only — control lives behind podium's governed doors, and the engine composition
 root is the conductor's (``podium.conductor.company.build``).
 """
+
+from podium.conductor.company import CompanyConfig, CompanyGraph, build
+
+__all__ = ["CompanyConfig", "CompanyGraph", "build"]

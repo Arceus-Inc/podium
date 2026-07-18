@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     db_max_overflow: int = 5
     log_json: bool = True
 
+    # Per-company JWT signing. The master secret MUST be overridden in any real deployment.
+    jwt_master_secret: str = "dev-insecure-change-me"
     instance_id: str = "local"
 
     # Per-actor rate limit (sliding window).
