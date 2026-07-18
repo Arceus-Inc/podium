@@ -29,7 +29,7 @@ async def test_readyz_ok_when_db_reachable(
     async with _client(app) as client:
         resp = await client.get("/readyz")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ready"}
+    assert resp.json() == {"status": "ready", "engine_deltas": "applied"}
 
 
 async def test_readyz_503_when_db_down() -> None:

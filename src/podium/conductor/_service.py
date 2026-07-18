@@ -25,6 +25,7 @@ from podium.runs import (
     queued_run_refs,
     reclaim_run,
     renew_lease,
+    rollup_run_counts,
 )
 
 _log = structlog.get_logger("podium.conductor")
@@ -52,29 +53,43 @@ class Conductor:
         self._batch_size = batch_size
         self._max_concurrent = max_concurrent or batch_size
         self._poll_interval = poll_interval
+        self._inflight: set[asyncio.Task[None]] = set()
 
     async def dispatch_once(self) -> int:
-        """Reclaim expired leases, then claim + run queued runs concurrently. Returns the number run."""
+        """Reclaim expired leases, then claim queued runs and execute them in the BACKGROUND.
+
+        Returns the number claimed. Execution is spawned, never awaited here: awaiting the
+        batch let one long delegation run hold the poll loop hostage while every later run
+        sat queued (live 2026-07-18). In-flight work is bounded by ``max_concurrent``; runs
+        beyond capacity simply stay queued for a later poll. ``drain()`` is the explicit join
+        for tests and shutdown.
+        """
         await self._reclaim_expired()
+        capacity = self._max_concurrent - len(self._inflight)
+        if capacity <= 0:
+            return 0
         async with self._control_sm() as session:
-            refs = await queued_run_refs(session, limit=self._batch_size)
+            refs = await queued_run_refs(session, limit=min(self._batch_size, capacity))
+        claimed = 0
+        for ref in refs:
+            if not await self._claim(ref):
+                continue  # a 409 — another worker owns it; don't retry
+            claimed += 1
+            task = asyncio.create_task(self._process_guarded(ref))
+            self._inflight.add(task)
+            task.add_done_callback(self._inflight.discard)
+        return claimed
 
-        semaphore = asyncio.Semaphore(self._max_concurrent)
+    async def _process_guarded(self, ref: RunRef) -> None:
+        try:
+            await self._process(ref)
+        except Exception:  # a claim/finalize error must not vanish silently
+            _log.exception("run_dispatch_failed", run_id=ref.id)
 
-        async def claim_and_run(ref: RunRef) -> bool:
-            async with semaphore:
-                if not await self._claim(ref):
-                    return False  # a 409 — another worker owns it; don't retry
-                await self._process(ref)
-                return True
-
-        results = await asyncio.gather(
-            *(claim_and_run(ref) for ref in refs), return_exceptions=True
-        )
-        for ref, result in zip(refs, results, strict=True):
-            if isinstance(result, Exception):  # a claim/finalize error must not vanish silently
-                _log.error("run_dispatch_failed", run_id=ref.id, error=repr(result))
-        return sum(1 for result in results if result is True)
+    async def drain(self) -> None:
+        """Await every in-flight run — the deterministic join for tests and shutdown."""
+        while self._inflight:
+            await asyncio.gather(*tuple(self._inflight), return_exceptions=True)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
         """Poll loop (the correctness floor). NOTIFY wiring layers on top of this same dispatch."""
@@ -106,6 +121,7 @@ class Conductor:
                 workspace_id=ref.workspace_id,
                 company_id=ref.company_id,
                 directive=ref.directive,
+                params=ref.params,
                 is_canceled=is_canceled,
             )
         except Exception as exc:  # executor failure is a failed run, not a dead worker
@@ -122,6 +138,7 @@ class Conductor:
             await finalize_run(
                 session, ref.id, owner=self._worker_id, status=result.status, error=result.error
             )
+            await rollup_run_counts(session, ref.id)  # the run's spine folded once, durably
 
     async def _renew_lease_loop(self, ref: RunRef) -> None:
         while True:

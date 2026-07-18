@@ -52,6 +52,7 @@ async def create(
             company_id=company_id,
             directive=body.directive,
             idempotency_key=body.idempotency_key,
+            params=body.params(),
         )
         return RunOut.model_validate(run)
 

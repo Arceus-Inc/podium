@@ -10,8 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from company import CompanyConfig, CompanyGraph, build
-from company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
+from podium.conductor.company import CompanyConfig, CompanyGraph, build
+from podium.conductor.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
+
+
+def _pg_conninfo(database_url: str, *, user: str) -> str:
+    return database_url.replace("+asyncpg", "").replace("://postgres@", f"://{user}@")
 
 
 def _config(tmp_path: Path, database_url: str) -> CompanyConfig:
@@ -21,9 +25,7 @@ def _config(tmp_path: Path, database_url: str) -> CompanyConfig:
         deployment="gpt-test",
         workdir=tmp_path,
         company_id=str(uuid4()),
-        ledger_dsn=database_url.replace("+asyncpg", "").replace(
-            "://postgres@", "://podium_app@"
-        ),
+        ledger_dsn=database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@"),
     )
 
 
@@ -63,7 +65,9 @@ def test_horizon_ports_are_bound_to_chorus_adapters(tmp_path: Path, database_url
     assert graph.horizon._capacity is not None
 
 
-def test_ceo_factory_carries_governance_and_the_shared_ledger(tmp_path: Path, database_url: str) -> None:
+def test_ceo_factory_carries_governance_and_the_shared_ledger(
+    tmp_path: Path, database_url: str
+) -> None:
     graph = build(_config(tmp_path, database_url))
 
     assert graph.ceo_factory._governance is graph.governance
@@ -91,3 +95,26 @@ def test_intake_submit_lands_in_the_shared_ledger(tmp_path: Path, database_url: 
         )
         == task_id
     )
+
+
+def test_build_wires_token_pricing_into_both_factories(tmp_path: Path, database_url: str) -> None:
+    """Live e2e finding: llm.call events carried cost_usd but cost_event stayed empty — beats
+    priced nothing because podium never wired TokenPricing. Both factories must price spend."""
+    from uuid import uuid4
+
+    graph = build(
+        CompanyConfig(
+            api_key="k",
+            base_url="https://x/openai/v1",
+            deployment="gpt-x",
+            workdir=tmp_path,
+            company_id=str(uuid4()),
+            ledger_dsn=_pg_conninfo(database_url, user="podium_app"),
+        )
+    )
+    try:
+        assert graph.factory._pricing is not None
+        assert graph.ceo_factory._pricing is not None
+        assert graph.factory._pricing.rate_for("any-model") is not None  # default rate prices all
+    finally:
+        graph.close()

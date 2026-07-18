@@ -24,6 +24,17 @@ from podium.logs import RunLogStore, excerpt_payload
 from podium.runs import active_engine_tasks, set_log_ref
 
 
+def _uuid_or_none(value: str | None) -> uuid.UUID | None:
+    """Engine ids are canonical uuid text in production; a non-uuid (test slug, legacy row)
+    still routes by string but is not stored in the uuid column."""
+    if value is None:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError:
+        return None
+
+
 class EventMirror:
     def __init__(
         self,
@@ -66,6 +77,7 @@ class EventMirror:
         type: str,
         payload: dict[str, Any],
         task_id: str | None = None,
+        trace_id: str | None = None,
         employee_id: str | None = None,
         at: datetime | None = None,
     ) -> Event:
@@ -75,7 +87,10 @@ class EventMirror:
                 seq = self._next_seq
                 if seq is None:
                     seq = await max_company_seq(session, self._company_id) + 1
-                run_id = self._task_to_run.get(task_id) if task_id is not None else None
+                # The trace (lineage root) is the run anchor; the beat's own task is the fallback
+                # for pre-spine emitters that only name themselves.
+                route_key = trace_id or task_id
+                run_id = self._task_to_run.get(route_key) if route_key is not None else None
                 # Blobs out: a big transcript goes to the log file; only an excerpt lands in the row.
                 stored_payload = payload
                 full_text: str | None = None
@@ -90,6 +105,8 @@ class EventMirror:
                     workspace_id=self._workspace_id,
                     run_id=run_id,
                     type=type,
+                    trace_id=_uuid_or_none(trace_id),
+                    task_id=task_id,
                     employee_id=employee_id,
                     payload=stored_payload,
                     created_at=at or datetime.now(UTC),

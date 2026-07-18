@@ -1,20 +1,71 @@
-# M0 dev stack: just Postgres. The api/conductor services join in later milestones.
+# The full CP-6 stack: postgres → migrate (role + schema + engine deltas) → api (serves the
+# dashboard) + conductor. Build context is the PARENT directory (the engine repos are podium's
+# path dependencies):  docker compose up --build  →  http://localhost:8000/dashboard
 services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_USER: podium
-      POSTGRES_PASSWORD: podium
+      POSTGRES_USER: postgres
       POSTGRES_DB: podium
+      POSTGRES_HOST_AUTH_METHOD: trust # dev stack; production injects real credentials
     ports:
       - "5432:5432"
     volumes:
       - podium_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U podium -d podium"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d podium"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  migrate:
+    build: { context: .., dockerfile: podium/Dockerfile }
+    command: ["python", "-m", "podium.bootstrap_db"] # role + alembic head (incl. engine deltas)
+    environment:
+      PODIUM_DATABASE_URL: postgresql+asyncpg://postgres@postgres:5432/podium # DDL owner
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    build: { context: .., dockerfile: podium/Dockerfile }
+    environment: &podium_env
+      PODIUM_DATABASE_URL: postgresql+asyncpg://podium_app@postgres:5432/podium
+      # Cross-tenant run discovery needs an RLS-bypassing control connection (M2 design) —
+      # under podium_app alone, RLS fail-closed hides every queued run (found by live e2e).
+      PODIUM_CONDUCTOR_CONTROL_DATABASE_URL: postgresql+asyncpg://postgres@postgres:5432/podium
+      PODIUM_ENGINE_LEDGER_DSN: postgresql://podium_app@postgres:5432/podium
+      PODIUM_JWT_MASTER_SECRET: ${PODIUM_JWT_MASTER_SECRET:-dev-insecure-change-me}
+      PODIUM_MODEL_API_KEY: ${PODIUM_MODEL_API_KEY:-}
+      PODIUM_MODEL_BASE_URL: ${PODIUM_MODEL_BASE_URL:-}
+      PODIUM_MODEL_DEPLOYMENT: ${PODIUM_MODEL_DEPLOYMENT:-}
+      PODIUM_LOG_DIR: /workdir/logs
+      PODIUM_WORKDIR: /workdir
+    ports:
+      - "8000:8000"
+    volumes:
+      - podium_workdir:/workdir # logs + company workdirs shared with the conductor (M3c)
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  conductor:
+    build: { context: .., dockerfile: podium/Dockerfile }
+    command: ["python", "-m", "podium.conductor"] # one per shard
+    environment: *podium_env
+    volumes:
+      - podium_workdir:/workdir
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
 volumes:
   podium_pg:
+  podium_workdir:

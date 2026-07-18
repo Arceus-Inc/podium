@@ -18,6 +18,7 @@ from chorus.adapters import CapacityAdapter, DelegatedIntakeAdapter
 from chorus.facade import Caps, Chorus
 from chorus.ledger import Ledger
 from chorus.roles import RolePlugin, RoleRegistry, default_roles
+from chorus_cli._beats import default_pricing_from_env
 from chorus_employee import default_landers
 from chorus_harness import EmployeeHarnessFactory
 from horizon import Horizon
@@ -25,7 +26,7 @@ from horizon.generation import ProposalStore
 from horizon.governance import HorizonGovernance
 from horizon.store import DecisionStore, StrategyStore
 
-from company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
+from podium.conductor.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,10 @@ def build(config: CompanyConfig) -> CompanyGraph:
     plugins = list(config.roles) if config.roles is not None else list(default_roles())
     registry = RoleRegistry.from_plugins(plugins)
     ledger = _open_ledger(config)
+    # Spend is priced at the beat seam (spec 04 §3): without a TokenPricing every beat reports
+    # cost_cents=0 and the priced ledger stays empty (found by the live e2e — llm.call events
+    # carried cost while cost_event had none). Env-tunable default rates price every model.
+    pricing = default_pricing_from_env()
 
     factory = EmployeeHarnessFactory(
         api_key=config.api_key,
@@ -90,6 +95,7 @@ def build(config: CompanyConfig) -> CompanyGraph:
         deployment=config.deployment,
         company_id=config.company_id,
         roles=registry,
+        pricing=pricing,
         seed=config.seed,
         ledger=ledger,
         work_root=config.workdir / "work",
@@ -126,6 +132,7 @@ def build(config: CompanyConfig) -> CompanyGraph:
         deployment=config.deployment,
         company_id=config.company_id,
         roles=registry,
+        pricing=pricing,
         ledger=ledger,
         governance=governance,
         work_root=config.workdir / "work",

@@ -1,0 +1,518 @@
+"""Control-plane HTTP doors. Every handler: authenticate → decide() → company visibility → plane.
+
+Thin governed mappings onto CompanyControlPlane sub-facades (M4 §3.3): the router owns auth and
+DTO serialization, the plane owns engine access — no engine type or connection escapes. Plane
+reads run in a worker thread (the engine ledger is sync psycopg by design)."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from typing import Any, Literal, TypeVar
+
+from chorus.errors import OrgInvariantViolation
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.concurrency import run_in_threadpool
+
+from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
+from podium.companies.service import get_company
+from podium.control._allocation import AllocationBoard
+from podium.control._delegation import CapacityEntry, TeamSummary
+from podium.control._direction import GoalNode
+from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
+from podium.control._observe import (
+    ArtifactSummary,
+    CompanyStatus,
+    OrgReport,
+    SkillSummary,
+    SpendRow,
+)
+from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
+from podium.control._workforce import (
+    DuplicateEmployee,
+    EmployeeView,
+    UnknownEmployeeError,
+    UnknownRole,
+)
+from podium.db import tenant_session
+from podium.runs.service import runs_by_status
+
+router = APIRouter(prefix="/v1/workspaces/{workspace_id}/companies/{company_id}", tags=["control"])
+
+_T = TypeVar("_T")
+
+
+def get_control_provider(request: Request) -> ControlPlaneProvider:
+    provider = getattr(request.app.state, "control_provider", None)
+    if provider is None:  # wired at lifespan from settings; absent only in misconfigured deploys
+        raise HTTPException(status_code=503, detail="control plane unavailable")
+    return provider  # type: ignore[no-any-return]
+
+
+async def _visible_company_or_404(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    actor: Actor,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+) -> None:
+    """Auth wall: decide() + product-DB visibility (RLS + ownership) — 404, never data."""
+    resource = Resource(kind="company", workspace_id=workspace_id, company_id=company_id)
+    if not decide(actor, "read", resource):
+        raise HTTPException(status_code=403, detail="forbidden")
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        company = await get_company(session, company_id, user_id=actor.user_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="company not found")
+
+
+async def _plane_read(
+    provider: ControlPlaneProvider,
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    read: Callable[[CompanyControlPlane], _T],
+) -> _T:
+    """One plane per request, opened and closed in a worker thread (sync engine connection)."""
+
+    def _run() -> _T:
+        plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+        try:
+            return read(plane)
+        finally:
+            plane.close()
+
+    return await run_in_threadpool(_run)
+
+
+@router.get("/goals", response_model=list[GoalNode])
+async def goal_tree(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[GoalNode]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.goal_tree(),
+    )
+
+
+@router.get("/workforce", response_model=list[EmployeeView])
+async def workforce(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[EmployeeView]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.workforce.roster(),
+    )
+
+
+@router.get("/teams", response_model=list[TeamSummary])
+async def teams(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[TeamSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.delegation.teams(),
+    )
+
+
+@router.get("/capacity", response_model=list[CapacityEntry])
+async def capacity(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[CapacityEntry]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.delegation.capacity(),
+    )
+
+
+@router.get("/status", response_model=CompanyStatus)
+async def status(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CompanyStatus:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.status(),
+    )
+
+
+@router.get("/employees/{employee_id}/skills", response_model=list[SkillSummary])
+async def employee_skills(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[SkillSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.skills(employee_id),
+    )
+
+
+class GoalPatch(BaseModel):
+    status: Literal["active", "archived"]
+
+
+@router.patch("/goals/{goal_id}", response_model=GoalNode)
+async def patch_goal(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    goal_id: str,
+    body: GoalPatch,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> GoalNode:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    node = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.set_goal_status(goal_id, body.status),
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="goal not found")
+    return node
+
+
+class GoalCreate(BaseModel):
+    title: str
+    level: Literal["company", "team", "employee", "task", "goal"]
+    parent_id: str | None = None
+
+
+@router.post("/goals", status_code=201, response_model=GoalNode)
+async def create_goal(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    body: GoalCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> GoalNode:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    node = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.create_goal(
+            title=body.title, level=body.level, parent_id=body.parent_id
+        ),
+    )
+    if node is None:
+        raise HTTPException(status_code=404, detail="parent goal not found")
+    return node
+
+
+class EmployeeCreate(BaseModel):
+    name: str
+    role: str
+    reports_to: str | None = None  # None = an org root (protected from termination)
+
+
+@router.post("/employees", status_code=201, response_model=EmployeeView)
+async def hire(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    body: EmployeeCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.workforce.hire(
+                name=body.name, role=body.role, reports_to=body.reports_to
+            ),
+        )
+    except UnknownRole as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except DuplicateEmployee as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/employees/{employee_id}", status_code=204)
+async def terminate(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> None:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.workforce.terminate(employee_id),
+        )
+    except UnknownEmployeeError as exc:
+        raise HTTPException(status_code=404, detail="employee not found") from exc
+    except OrgInvariantViolation as exc:  # e.g. the protected org root
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/allocation", response_model=AllocationBoard)
+async def allocation(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> AllocationBoard:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.allocation.board(),
+    )
+
+
+@router.get("/costs", response_model=list[SpendRow])
+async def costs(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    by: Literal["model", "employee", "day"] = "day",
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[SpendRow]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.costs(by),
+    )
+
+
+class CompanyOverview(BaseModel):
+    runs_by_status: dict[str, int]  # product DB: the run lifecycle counts
+    employees: int
+    open_tasks: int
+    running_beats: int
+    blocked_tasks: int
+    spend_cents: int
+
+
+@router.get("/overview", response_model=CompanyOverview)
+async def overview(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CompanyOverview:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        run_counts = await runs_by_status(session, company_id)
+
+    def _engine_half(plane: CompanyControlPlane) -> tuple[Any, int]:
+        return plane.observe.status(), plane.observe.spend_total_cents()
+
+    status_view, spend = await _plane_read(
+        provider, workspace_id=workspace_id, company_id=company_id, read=_engine_half
+    )
+    return CompanyOverview(
+        runs_by_status=run_counts,
+        employees=status_view.employees,
+        open_tasks=status_view.open_tasks,
+        running_beats=status_view.running_beats,
+        blocked_tasks=status_view.blocked_tasks,
+        spend_cents=spend,
+    )
+
+
+@router.get("/report", response_model=OrgReport)
+async def report(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> OrgReport:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.report(),
+    )
+
+
+@router.get("/artifacts", response_model=list[ArtifactSummary])
+async def artifacts(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    limit: int = 50,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[ArtifactSummary]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    bounded = max(1, min(limit, 200))  # a page, never the firehose
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.observe.artifacts(limit=bounded),
+    )
+
+
+@router.get("/export")
+async def export_workforce(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> dict[str, object]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.workforce.export_bundle(),
+    )
+
+
+# -- the human boundary (CO2): CEO proposals decided by a person, never a model ---------------
+
+
+@router.get("/plans", response_model=list[PlanView])
+async def workforce_plans(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[PlanView]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.governance.plans(),
+    )
+
+
+async def _decide_plan(
+    *,
+    approve: bool,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+) -> PlanView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    decided_by = str(
+        actor.user_id or actor.actor_id
+    )  # the authenticated human/key, never client-supplied
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: (
+                plane.governance.approve(plan_id, by=decided_by)
+                if approve
+                else plane.governance.reject(plan_id, by=decided_by)
+            ),
+        )
+    except UnknownPlanError as exc:
+        raise HTTPException(status_code=404, detail="plan not found") from exc
+    except PlanConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OrgInvariantViolation as exc:  # a stale plan the org has since outgrown
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/plans/{plan_id}/approve", response_model=PlanView)
+async def approve_plan(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> PlanView:
+    """Atomically materialize the CEO's proposal — employees, grants, budgets, audit trail."""
+    return await _decide_plan(
+        approve=True,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        plan_id=plan_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+    )
+
+
+@router.post("/plans/{plan_id}/reject", response_model=PlanView)
+async def reject_plan(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    plan_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> PlanView:
+    """Decline without touching the workforce; the CEO may propose a fresh revision."""
+    return await _decide_plan(
+        approve=False,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        plan_id=plan_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+    )

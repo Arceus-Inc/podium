@@ -21,11 +21,11 @@ from typing import Any
 from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from company import CompanyConfig, CompanyGraph, build
 from podium.companies import mark_company_idle
 from podium.conductor._executor import CancelCheck, ExecutionResult
 from podium.conductor._ingest import EventIngest
 from podium.conductor._mirror import EventMirror
+from podium.conductor.company import CompanyConfig, CompanyGraph, build
 from podium.db import tenant_session
 from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id
@@ -41,6 +41,7 @@ _TERMINAL: dict[TaskStatus, RunStatus] = {
 class _CompanyRuntime:
     graph: CompanyGraph
     assignee: str
+    ceo: str  # formation runs route here — the one employee with governance tools
     mirror: EventMirror
     ingest: EventIngest
 
@@ -82,12 +83,13 @@ class CompanyGraphHost:
                 ledger_dsn=self._engine_ledger_dsn,
             )
         )
-        # ponytail: one hardcoded worker to make runs executable; M4 provisioning sets the real
-        # workforce from the company config. Idempotent: a saga retry (built, idle-flip failed)
-        # finds the worker already hired in the engine store.
+        # ponytail: one hardcoded worker to make runs executable; the CEO's approved workforce
+        # plan materializes the real org. Idempotent: a saga retry (built, idle-flip failed)
+        # finds both already hired in the engine store.
         worker = graph.org._ledger.employees.get("ace") or graph.org.hire(
             name="Ace", role="backend_engineer"
         )
+        ceo = graph.org._ledger.employees.get("casey") or graph.org.hire(name="Casey", role="ceo")
         mirror = EventMirror(
             self._app_sm,
             company_id=company_id,
@@ -97,7 +99,10 @@ class CompanyGraphHost:
         await mirror.rehydrate()  # pick up runs already in flight from a prior conductor
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()
-        runtime = _CompanyRuntime(graph=graph, assignee=worker.name, mirror=mirror, ingest=ingest)
+        graph.org.start()  # the always-on heartbeat: wakes and routines pulse until aclose
+        runtime = _CompanyRuntime(
+            graph=graph, assignee=worker.name, ceo=ceo.name, mirror=mirror, ingest=ingest
+        )
         # The provisioning saga's happy edge: the graph built and the engine store is live, so the
         # company leaves `provisioning`. Any failure up to and INCLUDING the flip leaves the
         # company provisioning and the runtime uncached — the next ensure genuinely retries.
@@ -105,6 +110,7 @@ class CompanyGraphHost:
             async with tenant_session(self._app_sm, workspace_id) as session:
                 await mark_company_idle(session, company_id)
         except BaseException:
+            await graph.org.stop()
             await ingest.stop()
             graph.close()
             raise
@@ -126,8 +132,58 @@ class CompanyGraphHost:
 
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
+            await runtime.graph.org.stop()  # drain in-flight beats before the ledger goes away
             await runtime.ingest.stop()
             runtime.graph.close()  # the company's live Postgres connection
+
+
+_FORMATION_CONTRACT = (
+    "This is a FORMATION directive: form the permanent organization for the objective below — "
+    "do NOT build the product yourself and do NOT write code. Call workforce_catalog_read "
+    "first, then submit exactly one complete typed workforce plan via workforce_plan_propose: "
+    "name each hire's profession from the catalog and its reporting line, and grant bounded "
+    "management authority — any lead expected to delegate work needs can_lead=true, "
+    "max_delegation_depth >= 1, and a max_team_size covering itself plus its reports. Keep "
+    "every budget allocation bounded. The plan stays pending for a human decision; never claim "
+    "anyone was hired. Then stop.\n\n## Objective\n"
+)
+
+
+def _effective_directive(params: dict[str, Any], directive: str) -> str:
+    """Formation runs carry the engine's formation contract server-side (live 2026-07-18: a
+    raw founder objective sent as-is made the CEO build the whole product personally instead
+    of proposing an org — the product owns the incantation, not the founder)."""
+    if params.get("execution_mode") == "formation":
+        return _FORMATION_CONTRACT + directive
+    return directive
+
+
+def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -> dict[str, Any]:
+    """Map durable run params onto org.submit kwargs — one run resource, mode discriminates.
+
+    params examples: {} (delivery via the default worker) · {"assignee": "bex"} ·
+    {"execution_mode": "formation"} · {"execution_mode": "delegation", "lead": "backend_lead",
+    "goal_id": "<goal uuid>", "max_team_size": 3, "spend_limit_cents": 500000}.
+    """
+    mode = params.get("execution_mode")
+    if mode == "formation":
+        # Founder intent → the CEO. Its harness carries the ledger-bound workforce tools; the
+        # typed proposal it leaves stays pending until a human hits the /plans doors.
+        return {"assignee": ceo}
+    if mode != "delegation":
+        return {"assignee": str(params.get("assignee") or default_assignee)}
+    from chorus.ledger import ExecutionMode
+
+    kwargs: dict[str, Any] = {
+        "assignee": str(params["lead"]),
+        "execution_mode": ExecutionMode.DELEGATION,
+        "goal_id": str(params["goal_id"]),
+    }
+    if params.get("max_team_size") is not None:
+        kwargs["delegation_max_team_size"] = int(params["max_team_size"])
+    if params.get("spend_limit_cents") is not None:
+        kwargs["delegation_spend_limit_cents"] = int(params["spend_limit_cents"])
+    return kwargs
 
 
 def _root_resolver(graph: CompanyGraph) -> Any:
@@ -147,6 +203,11 @@ def _root_resolver(graph: CompanyGraph) -> Any:
 
 
 class ChorusRunExecutor:
+    """Submit onto the always-on heartbeat and watch the root task to a terminal state.
+
+    ``max_ticks`` is the watch budget in ~1s polls; ``0`` means watch forever (infinite pulses —
+    the company-OS mode). The heartbeat itself always runs until the host closes."""
+
     def __init__(self, host: CompanyGraphHost, *, max_ticks: int = 60) -> None:
         self._host = host
         self._max_ticks = max_ticks
@@ -159,22 +220,29 @@ class ChorusRunExecutor:
         company_id: uuid.UUID,
         directive: str,
         is_canceled: CancelCheck,
+        params: dict[str, Any] | None = None,
     ) -> ExecutionResult:
+        import asyncio
+        import itertools
+
         runtime = await self._host.ensure(company_id, workspace_id)
-        task = runtime.graph.org.submit(directive, assignee=runtime.assignee)
+        task = runtime.graph.org.submit(
+            _effective_directive(params or {}, directive),
+            **_submit_kwargs(params or {}, default_assignee=runtime.assignee, ceo=runtime.ceo),
+        )
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task.id
         )
-        for _ in range(self._max_ticks):
+        budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
+        for _ in budget:
             if await is_canceled():
                 return ExecutionResult(status=RunStatus.CANCELED)
-            await runtime.graph.org.tick()
-            await runtime.graph.org.drain()
             current = runtime.graph.org._ledger.tasks.get(task.id)
             if current is not None and current.status in _TERMINAL:
                 mapped = _TERMINAL[current.status]
                 error = "task rejected" if mapped is RunStatus.FAILED else None
                 return ExecutionResult(status=mapped, error=error)
+            await asyncio.sleep(1.0)
         # ponytail: on timeout the chorus task is left in-progress (an orphan); chorus has no per-task
         # cancel today (only whole-heartbeat stop, which would kill sibling runs).
         return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")

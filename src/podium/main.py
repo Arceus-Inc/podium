@@ -11,23 +11,22 @@ from fastapi import FastAPI, Response
 from sqlalchemy import text
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
+from cockpit.router import router as cockpit_router
+from cockpit.router import shell_router as cockpit_shell_router
 from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
+from podium.control import ControlPlaneProvider
+from podium.control.router import router as control_router
 from podium.db import make_engine, make_sessionmaker
+from podium.dev import router as dev_router
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
 from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
-from podium.settings import Settings, get_settings
-
-
-def _make_rate_limiter(settings: Settings) -> SlidingWindowRateLimiter:
-    return SlidingWindowRateLimiter(
-        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
-    )
+from podium.settings import get_settings
 
 
 @asynccontextmanager
@@ -46,6 +45,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await broadcaster.start()
     app.state.broadcaster = broadcaster
     app.state.log_store = RunLogStore(settings.log_dir)
+    app.state.cockpit_workdir = settings.workdir  # semantic/episodic stores live per company here
+    app.state.control_provider = ControlPlaneProvider(
+        engine_dsn=settings.resolved_engine_ledger_dsn()
+    )
+    if settings.dev_bootstrap:  # the privileged playground-minting door — dev stacks only
+        bootstrap_url = settings.conductor_control_database_url or settings.database_url
+        bootstrap_engine = make_engine(bootstrap_url)
+        app.state.bootstrap_engine = bootstrap_engine
+        app.state.bootstrap_sessionmaker = make_sessionmaker(bootstrap_engine)
     structlog.get_logger("podium").info(
         "log_store_ready",
         log_dir=str(settings.log_dir),
@@ -74,7 +82,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="podium", lifespan=lifespan)
-    app.state.rate_limiter = _make_rate_limiter(get_settings())
+    settings = get_settings()
+    app.state.rate_limiter = SlidingWindowRateLimiter(
+        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
+    )
     install_error_handlers(app)
 
     @app.get("/healthz")
@@ -83,18 +94,34 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     async def readyz(response: Response) -> dict[str, str]:
-        # Readiness must actually touch the DB — a probe that lies is worse than none.
+        # Readiness must actually touch the DB — a probe that lies is worse than none — and
+        # prove every shipped engine delta is applied (a skipped migrate step reads not-ready).
+        from chorus.ledger import load_migrations
+
         try:
             async with app.state.sessionmaker() as session:
-                await session.execute(text("SELECT 1"))
+                applied = {
+                    row[0]
+                    for row in await session.execute(
+                        text("SELECT id FROM chorus_schema_migrations")
+                    )
+                }
         except Exception:
             response.status_code = 503
             return {"status": "unavailable"}
-        return {"status": "ready"}
+        pending = sorted(m.id for m in load_migrations() if m.id not in applied)
+        if pending:
+            response.status_code = 503
+            return {"status": "unavailable", "engine_deltas": f"pending: {', '.join(pending)}"}
+        return {"status": "ready", "engine_deltas": "applied"}
 
     app.include_router(companies_router)
     app.include_router(runs_router)
     app.include_router(events_router)
+    app.include_router(control_router)
+    app.include_router(cockpit_shell_router)
+    app.include_router(dev_router)
+    app.include_router(cockpit_router)
     return app
 
 

@@ -29,7 +29,11 @@ class Event(Base):
         UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True
     )
     type: Mapped[str] = mapped_column(String)  # chorus EventKind value, e.g. 'run.text'
-    # Chorus-minted employee id — engine context, text until the M5.2 engine port.
+    # The engine lineage root (uuid text in chorus; the id runs.engine_task_id maps to a run).
+    trace_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # The beat's own task — a child in a delegation tree keeps its own lane id.
+    task_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Employee slug — the actor's lane key (OBS P2).
     employee_id: Mapped[str | None] = mapped_column(String, nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

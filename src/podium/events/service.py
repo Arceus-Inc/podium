@@ -30,6 +30,8 @@ async def append_event(
     employee_id: str | None,
     payload: dict[str, Any],
     created_at: datetime,
+    trace_id: uuid.UUID | None = None,
+    task_id: str | None = None,
 ) -> Event:
     event = Event(
         company_id=company_id,
@@ -37,6 +39,8 @@ async def append_event(
         workspace_id=workspace_id,
         run_id=run_id,
         type=type,
+        trace_id=trace_id,
+        task_id=task_id,
         employee_id=employee_id,
         payload=payload,
         created_at=created_at,
