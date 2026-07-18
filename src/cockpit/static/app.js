@@ -397,8 +397,19 @@ function wireView() {
   document.querySelectorAll(".why-link").forEach((link) => {
     link.onclick = async (e) => {
       e.preventDefault();
-      const chain = await api(`/tasks/${link.dataset.task}/why`);
-      $("why-out").innerHTML = chain.map((l) => `<span class="pill">${esc(l.kind)}</span> ${esc(l.label)}`).join(" ← ");
+      const taskId = link.dataset.task;
+      const [chain, thread] = await Promise.all([
+        api(`/tasks/${taskId}/why`), api(`/tasks/${taskId}/comments`),
+      ]);
+      $("why-out").innerHTML =
+        chain.map((l) => `<span class="pill">${esc(l.kind)}</span> ${esc(l.label)}`).join(" ← ") +
+        `<ol class="feed" style="margin-top:8px">${thread.map((c) => `<li><strong>${esc(c.author)}</strong> ${esc(c.body)}</li>`).join("")}</ol>` +
+        `<form id="comment-form" data-task="${esc(taskId)}"><input id="comment-body" placeholder="comment — the assignee's next beat reads it" required /><button>Comment</button></form>`;
+      $("comment-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        await api2("POST", `/tasks/${taskId}/comments`, { body: $("comment-body").value });
+        link.onclick(e);
+      };
     };
   });
   document.querySelectorAll(".routine-act").forEach((btn) => {

@@ -19,6 +19,10 @@ from starlette.concurrency import run_in_threadpool
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies.service import get_company
 from podium.control._allocation import AllocationBoard
+from podium.control._comments import (
+    CommentView,
+    UndeliverableCommentError,
+)
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
 from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
@@ -642,3 +646,55 @@ async def task_why(
         )
     except UnknownTaskError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
+
+
+class CommentCreate(BaseModel):
+    body: str
+
+
+@router.get("/tasks/{task_id}/comments", response_model=list[CommentView])
+async def task_comments(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[CommentView]:
+    """The task's comment thread, oldest first — shared context, not a private inbox."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.comments.thread(task_id),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+
+
+@router.post("/tasks/{task_id}/comments", status_code=201, response_model=CommentView)
+async def post_task_comment(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    task_id: str,
+    body: CommentCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> CommentView:
+    """The human joins the thread; delivery wakes whoever the task concerns."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    author = str(actor.user_id or actor.workspace_id)  # the authenticated actor, never client-supplied
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.comments.post(task_id, body=body.body, by_user=author),
+        )
+    except UnknownTaskError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except UndeliverableCommentError as exc:
+        raise HTTPException(status_code=409, detail="no one to notify on this task") from exc
