@@ -12,10 +12,18 @@ const state = {
 };
 const $ = (id) => document.getElementById(id);
 const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const api = (path) =>
+const api = (path, method = "GET", body) =>
   fetch(`/v1/workspaces/${state.ctx.workspaceId}/companies/${state.ctx.companyId}${path}`, {
-    headers: { Authorization: `Bearer ${state.ctx.token}` },
-  }).then((r) => { if (!r.ok) throw new Error(`${path} -> ${r.status}`); return r.json(); });
+    method,
+    headers: { Authorization: `Bearer ${state.ctx.token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(async (r) => {
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail;  // the door's typed refusal, when present
+      throw Object.assign(new Error(detail || `${path} -> ${r.status}`), { status: r.status });
+    }
+    return r.json();
+  });
 
 /* ================= connect + bootstrap ================= */
 $("connect-form").addEventListener("submit", (e) => {
@@ -385,7 +393,7 @@ function wireView() {
     form.querySelectorAll("button").forEach((btn) => {
       btn.onclick = async (e) => {
         e.preventDefault();
-        await api2("POST", `/plans/${form.dataset.plan}/${btn.dataset.decision}`, {});
+        await api(`/plans/${form.dataset.plan}/${btn.dataset.decision}`, "POST", {});
         await refreshSnapshot(); render();
       };
     });
@@ -393,7 +401,7 @@ function wireView() {
   const goal = $("goal-form");
   if (goal) goal.onsubmit = async (e) => {
     e.preventDefault();
-    await api2("POST", "/goals", { title: $("goal-title").value, level: $("goal-level").value });
+    await api("/goals", "POST", { title: $("goal-title").value, level: $("goal-level").value });
     render();
   };
   document.querySelectorAll(".why-link").forEach((link) => {
@@ -409,7 +417,7 @@ function wireView() {
         `<form id="comment-form" data-task="${esc(taskId)}"><input id="comment-body" placeholder="comment — the assignee's next beat reads it" required /><button>Comment</button></form>`;
       $("comment-form").onsubmit = async (ev) => {
         ev.preventDefault();
-        await api2("POST", `/tasks/${taskId}/comments`, { body: $("comment-body").value });
+        await api(`/tasks/${taskId}/comments`, "POST", { body: $("comment-body").value });
         link.onclick(e);
       };
     };
@@ -417,7 +425,7 @@ function wireView() {
   document.querySelectorAll(".employee-act").forEach((btn) => {
     btn.onclick = async (e) => {
       e.preventDefault();
-      await api2("POST", `/employees/${btn.dataset.employee}/${btn.dataset.act}`, {});
+      await api(`/employees/${btn.dataset.employee}/${btn.dataset.act}`, "POST", {});
       const lane = state.lanes.get(btn.dataset.employee);
       if (lane) lane.status = btn.dataset.act === "pause" ? "paused" : "idle";
       render();
@@ -427,7 +435,7 @@ function wireView() {
     btn.onclick = async (e) => {
       e.preventDefault();
       try {
-        await api2("POST", `/routines/${btn.dataset.routine}/${btn.dataset.act}`, {});
+        await api(`/routines/${btn.dataset.routine}/${btn.dataset.act}`, "POST", {});
       } catch (err) {
         // The engine's refusal is a feature (e.g. fire on a COALESCE routine already running) —
         // show it, don't swallow it.
@@ -445,7 +453,7 @@ function wireView() {
   if (hire) hire.onsubmit = async (e) => {
     e.preventDefault();
     const reports = $("hire-boss").value.trim();
-    await api2("POST", "/employees", { name: $("hire-name").value, role: $("hire-role").value, reports_to: reports || null });
+    await api("/employees", "POST", { name: $("hire-name").value, role: $("hire-role").value, reports_to: reports || null });
     await seedLanes(); await refreshSnapshot(); render();
   };
   const trace = $("trace-form");
@@ -456,17 +464,6 @@ function wireView() {
     $("run-trace").innerHTML = (page.data ?? []).map((ev) => `<li class="${ev.type === "memory.retrieved" ? "memory" : ""}">${ev.seq} ${esc(ev.type)} ${esc(JSON.stringify(ev.payload).slice(0, 110))}</li>`).join("");
   };
 }
-const api2 = (method, path, body) =>
-  fetch(`/v1/workspaces/${state.ctx.workspaceId}/companies/${state.ctx.companyId}${path}`, {
-    method, headers: { Authorization: `Bearer ${state.ctx.token}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }).then(async (r) => {
-    if (!r.ok) {
-      const detail = (await r.json().catch(() => ({}))).detail;  // the door's typed refusal, when present
-      throw Object.assign(new Error(detail || `${path} -> ${r.status}`), { status: r.status });
-    }
-    return r.json();
-  });
-
 /* ================= the live architecture map (mirrors chorus-system-architecture-v2) ======= */
 function archSVG(c) {
   const box = (x, y, w, h, title, sub, view, nid) => `
