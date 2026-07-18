@@ -32,3 +32,19 @@ commits) → what ran → outcome → spend.
   completed the decided formation + passed review tasks. Left the in-flight delegation
   undisturbed (server restart deferred until it reaches terminal).
 - Spend so far (fresh company): ~$1.21.
+
+## Iteration 2 — 2026-07-18 ~15:40
+
+- **Observed (live, both companies)**: backend engineer report-only routine beats (SLO watch,
+  dependency scan) failed 0.0 under the strict-TDD reviewed build — "repo file access and even
+  read-only git/status were denied by a strict TDD gate". videocursor: 5-IC fan-out across
+  every profession; marketer + frontend DONE first try; be/analyst/designer rejected (lead's
+  paraphrased intents drifted from module framing; analyst missed its findings.md artifact).
+  linkport: lead dispatched correctives organically; links.js corrective converging on
+  API-mismatch feedback.
+- **Changed (chorus dc99521)**: backend_engineer_dod honors the routines' own contract phrase
+  ("Report only" / "Report and propose only") → judged-report agent_review that PASSES honest
+  "nothing to scan yet" findings; build intents keep the reviewed build.
+- **Ran**: 455 employee tests green; ruff+mypy clean. Stack restarted (fix live; recovery
+  resumed the one in-flight corrective).
+- **Queued**: child-intent/DoD alignment (lead paraphrase drift) if correctives don't converge.
