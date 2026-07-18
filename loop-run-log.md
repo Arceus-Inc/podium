@@ -81,3 +81,17 @@ commits) → what ran → outcome → spend.
   children cancelled, recovery resolved); kicked delegation v2 (run 019f74a6-83a6…) with
   verbatim per-IC module briefs, depends_on ordering (marketer after analyst), findings.md
   named for the analyst, and explicit corrective-dispatch instruction. Web tools now live.
+
+## Iteration 5 — 2026-07-18 ~16:15
+
+- **Observed (v2 round)**: verbatim child briefs + depends_on WORKED — analyst done first try
+  (web tools live, findings.md named), marketer done grounded in the analyst's research,
+  executive review done with NO board gate (it.1 fix verified in production). The one
+  persistent flaw: the be build child rejected again with ZERO artifacts — its traces show
+  every orientation call (ls/git status/read) refused pre-RED, and the generator never even
+  spawned test_author before giving up.
+- **Changed (chorus d2715be)**: the TDD gate now admits calls the tool itself classifies
+  read-only (dream's vetted bash/git allowlists) before RED — inspection is orientation, not
+  production. Mutations stay locked until RED.
+- **Ran**: gate + harness suites green; ruff+mypy clean. Restart armed for the next
+  between-beats window so the lead's be corrective runs on the fixed gate.
