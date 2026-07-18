@@ -8,10 +8,10 @@ records come from chorus.*
 
 ## 1. Placement & the company refactor
 
-- New package **`src/cockpit`** — outside `src/podium`, beside it. It absorbs the engine
-  composition root: **`src/company` moves to `src/cockpit/company`** (the cockpit *is* the
-  product's composition layer: it builds the graph, and it is the one place with the standing
-  right to introspect every seam). podium (conductor) imports `cockpit.company`.
+- New package **`src/cockpit`** — outside `src/podium`, beside it. Pure visibility.
+  (Revised 2026-07-18: the engine composition root first moved here as `cockpit/company`,
+  then to **`podium/conductor/company`** — its only production caller is the conductor, and
+  housing the runtime in the cockpit made it read as a second control plane.)
 - The cockpit app mounts into podium's FastAPI app (one server, same auth walls:
   actor → decide() → company visibility). podium keeps ownership of control doors (runs, goals,
   hire…); the cockpit adds **visibility only**.
