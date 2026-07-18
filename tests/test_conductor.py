@@ -313,6 +313,41 @@ def test_delivery_runs_default_to_the_company_root_goal() -> None:
     assert _submit_kwargs({}, **kw, default_goal_id=None) == {"assignee": "ace"}
 
 
+def test_formation_seeds_the_root_goal_from_the_founder_objective() -> None:
+    """Free-run checklist #4: every company starts with its founder objective as the root goal —
+    the why-chain needs a root, and the executive review needs a tree to review. Idempotent:
+    a company that already has a root goal is left untouched."""
+
+    class _Goals:
+        def __init__(self, roots: list[object]) -> None:
+            self._roots = roots
+            self.created: list[object] = []
+
+        def children(self, parent_id: object) -> list[object]:
+            assert parent_id is None
+            return self._roots
+
+        def create(self, goal: object) -> object:
+            self.created.append(goal)
+            return goal
+
+    class _Ledger:
+        def __init__(self, roots: list[object]) -> None:
+            self.goals = _Goals(roots)
+
+    from podium.conductor._chorus_executor import _ensure_root_goal
+
+    empty = _Ledger([])
+    goal_id = _ensure_root_goal(empty, "Build linkport — a link-in-bio tool.")  # type: ignore[arg-type]
+    assert goal_id is not None
+    assert len(empty.goals.created) == 1
+    assert "linkport" in empty.goals.created[0].title  # the objective IS the goal
+
+    seeded = _Ledger([type("G", (), {"id": "g-root", "status": "active"})()])
+    assert _ensure_root_goal(seeded, "anything") == "g-root"  # type: ignore[arg-type]
+    assert seeded.goals.created == []
+
+
 def test_formation_directive_carries_the_formation_contract() -> None:
     """Live 2026-07-18: 'make an AI notetaker app' in formation mode reached the CEO raw and
     she built the product herself. The product injects the formation contract server-side."""

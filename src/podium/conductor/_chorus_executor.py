@@ -139,15 +139,18 @@ class CompanyGraphHost:
 
 _FORMATION_CONTRACT = (
     "This is a FORMATION directive: form the permanent organization for the objective below — "
-    "do NOT build the product yourself and do NOT write code. Call workforce_catalog_read "
-    "first, then submit exactly one complete typed workforce plan via workforce_plan_propose: "
-    "name each hire's profession from the catalog, its reporting line, and its "
-    "responsibilities — 2-3 concrete 'when I'm relevant' ownership statements (e.g. 'owns the "
-    "parser module'), which leads later use to pick assignees — and grant bounded "
-    "management authority — any lead expected to delegate work needs can_lead=true, "
-    "max_delegation_depth >= 1, and a max_team_size covering itself plus its reports. Keep "
-    "every budget allocation bounded. The plan stays pending for a human decision; never claim "
-    "anyone was hired. Then stop.\n\n## Objective\n"
+    "do NOT build the product yourself and do NOT write code. Process guidance (not acceptance "
+    "criteria): consult workforce_catalog_read for the valid professions, then submit one "
+    "complete typed workforce plan via workforce_plan_propose.\n\n"
+    "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
+    "contains one proposed plan in which every hire names a catalog profession, a reporting "
+    "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
+    "parser module' — leads later use these to pick assignees); any lead expected to delegate "
+    "holds a bounded management grant (can_lead=true, max_delegation_depth >= 1, max_team_size "
+    "covering itself plus its reports); every budget allocation is bounded; and "
+    "`governance-ledger.md` records the proposal line. Tool-call ordering is NOT observable "
+    "and is never an acceptance criterion. The plan stays pending for a human decision; never "
+    "claim anyone was hired. Then stop.\n\n## Objective\n"
 )
 
 
@@ -209,6 +212,28 @@ def _root_goal_id(ledger: Any) -> str | None:
     return None
 
 
+def _ensure_root_goal(ledger: Any, directive: str) -> str | None:
+    """Every company starts with its founder objective as the root goal (free-run #4).
+
+    Idempotent: an existing active root wins. The objective's first sentence is the title —
+    the why-chain's root is the founder's own words, never an invented label.
+    """
+    existing = _root_goal_id(ledger)
+    if existing is not None:
+        return existing
+    import re
+    import uuid as _uuid
+
+    from chorus.ledger import Goal
+
+    first_sentence = re.split(r"(?<=[.!?])\s", directive.strip(), maxsplit=1)[0]
+    title = first_sentence[:200] if first_sentence else directive[:200]
+    if not title:
+        return None
+    created = ledger.goals.create(Goal(id=str(_uuid.uuid4()), title=title))
+    return str(created.id)
+
+
 def _root_resolver(graph: CompanyGraph) -> Any:
     """Map any chorus task id to its root (the run's engine_task_id) by walking parents in the ledger."""
     ledger = graph.org._ledger
@@ -249,6 +274,10 @@ class ChorusRunExecutor:
         import itertools
 
         runtime = await self._host.ensure(company_id, workspace_id)
+        if (params or {}).get("execution_mode") == "formation":
+            # Free-run #4: the founder objective becomes the root goal before the CEO ever
+            # beats — the review has a tree, and every later run inherits the "why".
+            _ensure_root_goal(runtime.graph.org._ledger, directive)
         task = runtime.graph.org.submit(
             _effective_directive(params or {}, directive),
             **_submit_kwargs(
