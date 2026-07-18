@@ -159,7 +159,12 @@ def _effective_directive(params: dict[str, Any], directive: str) -> str:
 
 
 def _submit_kwargs(params: dict[str, Any], *, default_assignee: str, ceo: str) -> dict[str, Any]:
-    """Map durable run params onto org.submit kwargs — one run resource, mode discriminates."""
+    """Map durable run params onto org.submit kwargs — one run resource, mode discriminates.
+
+    params examples: {} (delivery via the default worker) · {"assignee": "bex"} ·
+    {"execution_mode": "formation"} · {"execution_mode": "delegation", "lead": "backend_lead",
+    "goal_id": "<goal uuid>", "max_team_size": 3, "spend_limit_cents": 500000}.
+    """
     mode = params.get("execution_mode")
     if mode == "formation":
         # Founder intent → the CEO. Its harness carries the ledger-bound workforce tools; the

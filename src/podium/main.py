@@ -26,13 +26,7 @@ from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
-from podium.settings import Settings, get_settings
-
-
-def _make_rate_limiter(settings: Settings) -> SlidingWindowRateLimiter:
-    return SlidingWindowRateLimiter(
-        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
-    )
+from podium.settings import get_settings
 
 
 @asynccontextmanager
@@ -88,7 +82,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="podium", lifespan=lifespan)
-    app.state.rate_limiter = _make_rate_limiter(get_settings())
+    settings = get_settings()
+    app.state.rate_limiter = SlidingWindowRateLimiter(
+        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
+    )
     install_error_handlers(app)
 
     @app.get("/healthz")
