@@ -21,6 +21,7 @@ from chorus.roles import RolePlugin, RoleRegistry, default_roles
 from chorus_cli._beats import default_pricing_from_env
 from chorus_employee import default_landers
 from chorus_harness import EmployeeHarnessFactory
+from dream.api.openai import OpenAIChatSubstrate
 from horizon import Horizon
 from horizon.generation import ProposalStore
 from horizon.governance import HorizonGovernance
@@ -113,13 +114,24 @@ def build(config: CompanyConfig) -> CompanyGraph:
         caps=Caps(max_concurrent_runs=config.max_concurrent_runs),
     )
 
+    # The direction engine runs on the same substrate the beats use — horizon's Reasoner
+    # protocol is one `complete()` method dream's chat substrate satisfies structurally.
+    # (Activated 2026-07-18: this was `reasoner=None` since CP-1, leaving ~1.2k lines of
+    # generation/planning inert — the company had execution but no self-directed direction.)
+    reasoner = OpenAIChatSubstrate(
+        name="horizon-reasoner",
+        api_key=config.api_key,
+        model=config.deployment,
+        base_url=config.base_url,
+    )
     horizon = Horizon(
         goals=ChorusGoalStore(org),
         intake=ChorusIntakePort(org),
         delegated_intake=DelegatedIntakeAdapter(org, ledger, company_id=config.company_id),
         capacity=CapacityAdapter(ledger, company_id=config.company_id),
         outcomes=ChorusOutcomeFeed(org),
-        reasoner=None,
+        reasoner=reasoner,
+        model=config.deployment,
         decisions=DecisionStore(config.workdir / "decisions.json"),
         strategy=StrategyStore(config.workdir / "strategy.json"),
         proposals=ProposalStore(config.workdir / "proposals.json"),

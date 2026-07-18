@@ -118,3 +118,12 @@ def test_build_wires_token_pricing_into_both_factories(tmp_path: Path, database_
         assert graph.factory._pricing.rate_for("any-model") is not None  # default rate prices all
     finally:
         graph.close()
+
+
+def test_horizon_gets_a_live_reasoner(tmp_path: Path, database_url: str) -> None:
+    """Activation 2026-07-18: the direction engine ran with reasoner=None since CP-1 —
+    ~1.2k lines of generation/planning inert. build() now wires the same chat substrate
+    the beats use, so decompose/generate no longer raise 'built without a reasoner'."""
+    graph = build(_config(tmp_path, database_url))
+    scout = getattr(graph.horizon, "_scout", None)
+    assert scout is not None  # generation lights up only when a reasoner is present

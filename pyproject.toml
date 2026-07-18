@@ -13,7 +13,7 @@ authors = [{ name = "Arceus-Inc" }]
 dependencies = [
   # The four engine repos. This package is the ONE production module allowed to import
   # both chorus and horizon (CON-001 exempts composition roots by name, not by accident).
-  "dream",
+  "dream[openai]",  # horizon's reasoner runs on dream's chat substrate (needs the SDK)
   "chorus[postgres]",  # M5: the engine ledger runs on Postgres in podium
   "lattice",
   "horizon",
@@ -76,6 +76,13 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["asyncpg.*"]  # asyncpg ships no py.typed
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# numpy 2.5 stubs use PEP-695 `type` statements our 3.11 target can't parse; the openai SDK
+# (reached via dream.api.openai) imports numpy transitively. We never touch numpy directly.
+module = ["numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true  # numpy ships stubs; without this the skip is ignored
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
