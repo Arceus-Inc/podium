@@ -101,6 +101,7 @@ class Operator:
         # goal_id -> {"title","run_id","lead","status"}
         self.goal_runs: dict[str, dict[str, Any]] = {}
         self._approved_plans: set[str] = set()
+        self._plan_attempts: dict[str, int] = {}
         self._expansion_inflight = False
         self._founded = False  # set once the first real workforce plan is approved
 
@@ -239,8 +240,14 @@ class Operator:
                             self.db.commit()
                             self.log(f"APPROVED plan {p['id'][:8]} (+{emps} hires, {grants} leads)")
                         except httpx.HTTPError as e:
-                            self.log(f"approve {p['id'][:8]} failed: {e}", "warn")
-                            self._approved_plans.discard(p["id"])
+                            n = self._plan_attempts.get(p["id"], 0) + 1
+                            self._plan_attempts[p["id"]] = n
+                            self.log(f"approve {p['id'][:8]} failed (attempt {n}): {e}", "warn")
+                            if n < 4:
+                                self._approved_plans.discard(p["id"])  # retry a few times
+                            else:
+                                self.log(f"giving up on plan {p['id'][:8]} after {n} attempts", "warn")
+                                self._expansion_inflight = False
             except Exception as e:  # noqa: BLE001
                 self.log(f"approvals_daemon: {e}", "warn")
             await asyncio.sleep(5)

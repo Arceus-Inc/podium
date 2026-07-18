@@ -487,6 +487,8 @@ async def _decide_plan(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OrgInvariantViolation as exc:  # a stale plan the org has since outgrown
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:  # engine invariant (e.g. profile versioning) — a conflict, not a 500
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/plans/{plan_id}/approve", response_model=PlanView)
