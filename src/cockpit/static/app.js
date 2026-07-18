@@ -248,7 +248,17 @@ async function renderOrg() {
       <div class="lane-task">${lane.taskId ? `task ${esc(lane.taskId.slice(0, 8))}…` : "—"}</div>
       <ol class="lane-events">${lane.lastEvents.map((e) => `<li>${esc(e.type)}</li>`).join("")}</ol>
     </article>`).join("");
+  const routines = await api("/routines");
+  const routinesCard = card(`Standing routines · ${routines.length}`,
+    routines.length
+      ? `<table class="t"><tr><th>employee</th><th>schedule</th><th>next run</th><th>status</th><th></th></tr>` +
+        routines.map((r) => `<tr><td>${esc(r.employee_id)}</td><td><code>${esc(r.schedule ?? "—")}</code></td><td>${esc(r.next_run_at ? r.next_run_at.slice(0, 16).replace("T", " ") : "—")}</td><td><span class="pill">${esc(r.status)}</span></td><td>` +
+          `<button class="routine-act" data-routine="${esc(r.id)}" data-act="${r.status === "paused" ? "resume" : "pause"}">${r.status === "paused" ? "Resume" : "Pause"}</button> ` +
+          `<button class="routine-act" data-routine="${esc(r.id)}" data-act="fire" title="fire now — writes the task through the engine's cron path">Fire now</button>` +
+        `</td></tr>`).join("") + `</table>`
+      : "No routines yet — hiring a role that declares one (ceo, pm, backend_engineer…) provisions it.");
   return `<div id="lanes">${lanes || card("", "No employees yet — hire below.")}</div>` +
+    routinesCard +
     card("Hire", `<form id="hire-form"><input id="hire-name" placeholder="name" required /><input id="hire-role" placeholder="role (backend_engineer, pm…)" required /><input id="hire-boss" placeholder="reports_to (blank = root)" /><button>Hire</button></form>`);
 }
 
@@ -382,6 +392,13 @@ function wireView() {
     await api2("POST", "/goals", { title: $("goal-title").value, level: $("goal-level").value });
     render();
   };
+  document.querySelectorAll(".routine-act").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      await api2("POST", `/routines/${btn.dataset.routine}/${btn.dataset.act}`, {});
+      render();
+    };
+  });
   const hire = $("hire-form");
   if (hire) hire.onsubmit = async (e) => {
     e.preventDefault();

@@ -30,6 +30,11 @@ from podium.control._observe import (
     SpendRow,
 )
 from podium.control._plane import CompanyControlPlane, ControlPlaneProvider
+from podium.control._routines import (
+    RoutineFireConflict,
+    RoutineSummary,
+    UnknownRoutineError,
+)
 from podium.control._workforce import (
     DuplicateEmployee,
     EmployeeView,
@@ -516,3 +521,100 @@ async def reject_plan(
         sessionmaker=sessionmaker,
         provider=provider,
     )
+
+
+@router.get("/routines", response_model=list[RoutineSummary])
+async def routines(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[RoutineSummary]:
+    """The company's standing heartbeats — every routine hire provisioned, any status."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.routines.list(),
+    )
+
+
+async def _routine_action(
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+    act: Callable[[CompanyControlPlane], _T],
+) -> _T:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider, workspace_id=workspace_id, company_id=company_id, read=act
+        )
+    except UnknownRoutineError as exc:
+        raise HTTPException(status_code=404, detail="routine not found") from exc
+    except RoutineFireConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/routines/{routine_id}/pause", response_model=RoutineSummary)
+async def pause_routine(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> RoutineSummary:
+    return await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.pause(routine_id),
+    )
+
+
+@router.post("/routines/{routine_id}/resume", response_model=RoutineSummary)
+async def resume_routine(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> RoutineSummary:
+    return await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.resume(routine_id),
+    )
+
+
+@router.post("/routines/{routine_id}/fire")
+async def fire_routine_now(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    routine_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> dict[str, str]:
+    """Fire the routine now through the engine's cron path; the conductor's pulse runs the task."""
+    task_id = await _routine_action(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        provider=provider,
+        act=lambda plane: plane.routines.fire(routine_id),
+    )
+    return {"task_id": task_id}
