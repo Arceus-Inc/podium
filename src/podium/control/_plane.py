@@ -19,6 +19,7 @@ from podium.control._delegation import DelegationFacade
 from podium.control._direction import DirectionFacade
 from podium.control._governance import GovernanceFacade
 from podium.control._observe import ObserveFacade
+from podium.control._routines import RoutinesFacade
 from podium.control._workforce import WorkforceFacade
 
 
@@ -57,6 +58,10 @@ class CompanyControlPlane:
     @property
     def observe(self) -> ObserveFacade:
         return ObserveFacade(self._ledger)
+
+    @property
+    def routines(self) -> RoutinesFacade:
+        return RoutinesFacade(self._ledger)
 
     def close(self) -> None:
         """Release the plane's engine connection."""
