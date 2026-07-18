@@ -76,6 +76,14 @@ ROADMAP: list[tuple[str, str]] = [
      "Deliver a privacy-first analytics helper module: a small event-tracking API, a localStorage "
      "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
      "and unit tests with captured evidence."),
+    ("Lumen brand & voice guide",
+     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
+     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
+     "a well-structured written guide document with concrete examples."),
+    ("Go-to-market content & SEO plan",
+     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
+     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
+     "ready for review."),
 ]
 
 
@@ -219,6 +227,58 @@ class Operator:
         return [dict(e) for e in org["employees"]
                 if e["can_lead"] and e["role"] != "ceo" and e["status"] != "terminated"]
 
+    @staticmethod
+    def goal_needs(title: str, brief: str) -> set[str]:
+        """Best-effort professions a goal needs, inferred from its title/brief keywords.
+
+        A lead can only decompose work onto its own direct reports, so a goal must be routed to a
+        lead whose team actually contains these professions — otherwise the lead's beats fail.
+        """
+        t = f"{title} {brief}".lower()
+        needs: set[str] = set()
+        if any(k in t for k in (
+            "app", "web app", "ui", "npm", "e2e", "playwright", "editor", "timer", "tracker",
+            "component", "package", "module", "localstorage", "frontend", "site", "page",
+            "render", "keyboard", "notification", "grid", "dialog",
+        )):
+            needs.add("frontend_engineer")
+        if any(k in t for k in ("storage", "sync", "backend", "api", "persistence", "server", "buffer")):
+            needs.add("backend_engineer")
+        if any(k in t for k in (
+            "design system", "design", "brand", "theme", "typography", "tokens", "spacing",
+            "accessible", "accessibility", "ux", "wireframe", "visual",
+        )):
+            needs.add("designer")
+        if any(k in t for k in ("market", "landing", "launch", "content", "seo", "copy", "growth", "campaign")):
+            needs.add("marketer")
+        if any(k in t for k in ("analytics", "metrics", "research", "analysis", "insight", "survey", "data")):
+            needs.add("analyst")
+        return needs or {"frontend_engineer"}
+
+    @staticmethod
+    def team_roles(org: dict[str, Any], lead_id: str) -> set[str]:
+        """Professions among a lead's direct reports (its potential mission-team ICs)."""
+        return {e["role"] for e in org["employees"]
+                if e["reports_to"] == lead_id and e["status"] != "terminated"}
+
+    def pick_lead_for_goal(self, org: dict[str, Any], leads: list[dict[str, Any]],
+                           title: str, brief: str, load: dict[str, int]) -> dict[str, Any] | None:
+        """Route a goal to the lead whose team best covers its needs, least-loaded first."""
+        if not leads:
+            return None
+        needs = self.goal_needs(title, brief)
+        scored = []
+        for ld in leads:
+            roles = self.team_roles(org, ld["id"])
+            coverage = len(needs & roles)
+            scored.append((coverage, -load.get(ld["id"], 0), len(roles), ld))
+        scored.sort(key=lambda s: (s[0], s[1], s[2]), reverse=True)
+        best = scored[0]
+        # If nobody can cover ANY need, don't hand it to an incapable lead — wait for a better fit.
+        if best[0] == 0:
+            return None
+        return best[3]
+
     # ---- daemons --------------------------------------------------------
     async def approvals_daemon(self) -> None:
         while True:
@@ -232,12 +292,12 @@ class Operator:
                     if p.get("status") == "proposed" and p["id"] not in self._approved_plans:
                         emps = len(p.get("employees", []))
                         grants = sum(1 for g in p.get("grants", []) if g.get("can_lead"))
-                        # Cap the org: once large enough, stop approving plans that ADD headcount
-                        # (leave them proposed) so the company doesn't balloon indefinitely.
-                        if headcount is not None and headcount >= MAX_HEADCOUNT and emps > 0:
+                        # Cap the org: once large enough, stop approving plans that would push
+                        # headcount past the ceiling (leave them proposed) so it doesn't balloon.
+                        if headcount is not None and emps > 0 and headcount + emps > MAX_HEADCOUNT:
                             self._approved_plans.add(p["id"])
                             self._expansion_inflight = False
-                            self.log(f"skip plan {p['id'][:8]} — headcount {headcount} >= max {MAX_HEADCOUNT}")
+                            self.log(f"skip plan {p['id'][:8]} — {headcount}+{emps} would exceed max {MAX_HEADCOUNT}")
                             continue
                         self._approved_plans.add(p["id"])
                         try:
@@ -357,9 +417,9 @@ class Operator:
             return None
 
     async def delegation_daemon(self) -> None:
-        # Keep up to MAX_ACTIVE_GOALS product goals in flight, each a delegation run under a real
-        # non-CEO lead. When a run finishes, retire the goal and let goal_daemon queue the next.
-        lead_rr = 0
+        # Keep up to MAX_ACTIVE_GOALS product goals in flight, each a delegation run under the lead
+        # whose team can actually deliver it (capability match). When a run finishes, retire the
+        # goal and let goal_daemon queue the next.
         while True:
             try:
                 org = await self.org()
@@ -380,12 +440,18 @@ class Operator:
                 active = [i for i in self.goal_runs.values()
                           if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
                 running = [i for i in active if i.get("run_id")]
-                # launch delegation runs for goals that have none yet and a lead is available
+                # current load per lead (running goals already assigned to them)
+                load: dict[str, int] = {}
+                for i in running:
+                    if i.get("lead"):
+                        load[i["lead"]] = load.get(i["lead"], 0) + 1
+                # launch delegation runs for goals that have none yet, routed by capability
                 if leads:
                     for gid, info in self.goal_runs.items():
                         if info.get("run_id") is None and len(running) < MAX_ACTIVE_GOALS:
-                            lead = leads[lead_rr % len(leads)]
-                            lead_rr += 1
+                            lead = self.pick_lead_for_goal(org, leads, info["title"], info["brief"], load)
+                            if lead is None:
+                                continue  # no capable lead free right now; retry next cycle
                             rid = await self.submit_run("delegation", info["brief"], goal_id=gid,
                                                         lead=lead["id"], max_team_size=int(lead["team"]) or 4)
                             if rid:
@@ -393,6 +459,8 @@ class Operator:
                                 info["lead"] = lead["id"]
                                 info["status"] = "running"
                                 running.append(info)
+                                load[lead["id"]] = load.get(lead["id"], 0) + 1
+                                self.log(f"delegated '{info['title'][:34]}' -> {lead['name']}")
             except Exception as e:  # noqa: BLE001
                 self.log(f"delegation_daemon: {e}\n{traceback.format_exc()}", "warn")
             await asyncio.sleep(20)
