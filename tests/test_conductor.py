@@ -414,6 +414,9 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
         async def attach_run(self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str) -> None:
             attached.append(engine_task_id)
 
+        def write_direction_report(self, rt: object, company_id: object) -> None:
+            pass  # the real host lands horizon's report; irrelevant to the reclaim contract
+
     executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
 
     async def never_canceled() -> bool:

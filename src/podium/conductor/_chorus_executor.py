@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import structlog
 from chorus.ledger._models import TaskStatus
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,6 +30,8 @@ from podium.conductor.company import CompanyConfig, CompanyGraph, build
 from podium.db import tenant_session
 from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id
+
+logger = structlog.get_logger("podium.conductor")
 
 _TERMINAL: dict[TaskStatus, RunStatus] = {
     TaskStatus.DONE: RunStatus.SUCCEEDED,
@@ -129,6 +132,17 @@ class CompanyGraphHost:
         async with tenant_session(self._app_sm, workspace_id) as session:
             await set_engine_task_id(session, run_id, engine_task_id)
         runtime.mirror.register_run(run_id=run_id, engine_task_id=engine_task_id)
+
+    def write_direction_report(self, runtime: _CompanyRuntime, company_id: uuid.UUID) -> None:
+        """Land horizon's loop story where the cockpit door reads it (LoopReporter's consumer).
+
+        Best-effort by design: a report that fails to write must never fail the run."""
+        try:
+            path = self._workdir / str(company_id) / "direction-report.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(runtime.graph.horizon.report(), encoding="utf-8")
+        except OSError:
+            logger.warning("direction_report_write_failed", company_id=str(company_id))
 
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
@@ -299,15 +313,19 @@ class ChorusRunExecutor:
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
         budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
-        for _ in budget:
-            if await is_canceled():
-                return ExecutionResult(status=RunStatus.CANCELED)
-            current = runtime.graph.org._ledger.tasks.get(task_id)
-            if current is not None and current.status in _TERMINAL:
-                mapped = _TERMINAL[current.status]
-                error = "task rejected" if mapped is RunStatus.FAILED else None
-                return ExecutionResult(status=mapped, error=error)
-            await asyncio.sleep(1.0)
-        # ponytail: on timeout the chorus task is left in-progress (an orphan); chorus has no per-task
-        # cancel today (only whole-heartbeat stop, which would kill sibling runs).
-        return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
+        try:
+            for _ in budget:
+                if await is_canceled():
+                    return ExecutionResult(status=RunStatus.CANCELED)
+                current = runtime.graph.org._ledger.tasks.get(task_id)
+                if current is not None and current.status in _TERMINAL:
+                    mapped = _TERMINAL[current.status]
+                    error = "task rejected" if mapped is RunStatus.FAILED else None
+                    return ExecutionResult(status=mapped, error=error)
+                await asyncio.sleep(1.0)
+            # ponytail: on timeout the chorus task is left in-progress (an orphan); chorus has no
+            # per-task cancel today (only whole-heartbeat stop, which would kill sibling runs).
+            return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
+        finally:
+            # However the run ends, the loop's story lands where the cockpit door reads it.
+            self._host.write_direction_report(runtime, company_id)
