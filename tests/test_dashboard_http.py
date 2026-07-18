@@ -49,10 +49,22 @@ async def test_shell_can_drive_a_run(api: httpx.AsyncClient) -> None:
     assert "idempotency_key" in js
 
 
-async def test_dashboard_shell_names_the_tabs(api: httpx.AsyncClient) -> None:
+async def test_dashboard_shell_names_the_sections(api: httpx.AsyncClient) -> None:
     body = (await api.get("/dashboard")).text
-    for tab in ("Org", "Work", "Runs", "Costs", "Ops"):
-        assert tab in body
+    for section in (
+        "Overview",
+        "Direction",
+        "Org",
+        "Work",
+        "Delegation",
+        "Runs",
+        "Episodic",
+        "Semantic",
+        "Skills",
+        "LLMOps",
+        "Ops",
+    ):
+        assert section in body
 
 
 def test_bootstrap_db_role_sql_is_idempotent_and_fail_closed() -> None:

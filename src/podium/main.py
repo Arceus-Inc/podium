@@ -11,12 +11,13 @@ from fastapi import FastAPI, Response
 from sqlalchemy import text
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
+from cockpit.router import router as cockpit_router
+from cockpit.router import shell_router as cockpit_shell_router
 from podium.auth import SlidingWindowRateLimiter
 from podium.companies.router import router as companies_router
 from podium.conductor._host import build_conductor
 from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
-from podium.dashboard import router as dashboard_router
 from podium.db import make_engine, make_sessionmaker
 from podium.dev import router as dev_router
 from podium.events import Broadcaster
@@ -25,13 +26,7 @@ from podium.http_errors import install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
-from podium.settings import Settings, get_settings
-
-
-def _make_rate_limiter(settings: Settings) -> SlidingWindowRateLimiter:
-    return SlidingWindowRateLimiter(
-        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
-    )
+from podium.settings import get_settings
 
 
 @asynccontextmanager
@@ -50,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await broadcaster.start()
     app.state.broadcaster = broadcaster
     app.state.log_store = RunLogStore(settings.log_dir)
+    app.state.cockpit_workdir = settings.workdir  # semantic/episodic stores live per company here
     app.state.control_provider = ControlPlaneProvider(
         engine_dsn=settings.resolved_engine_ledger_dsn()
     )
@@ -86,7 +82,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="podium", lifespan=lifespan)
-    app.state.rate_limiter = _make_rate_limiter(get_settings())
+    settings = get_settings()
+    app.state.rate_limiter = SlidingWindowRateLimiter(
+        max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
+    )
     install_error_handlers(app)
 
     @app.get("/healthz")
@@ -120,8 +119,9 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(events_router)
     app.include_router(control_router)
-    app.include_router(dashboard_router)
+    app.include_router(cockpit_shell_router)
     app.include_router(dev_router)
+    app.include_router(cockpit_router)
     return app
 
 

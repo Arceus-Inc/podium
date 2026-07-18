@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>arceus — company cockpit</title>
+  <link rel="stylesheet" href="/dashboard/style.css" />
+</head>
+<body>
+  <nav id="nav">
+    <div class="brand">arceus<small id="conn" data-state="idle">idle</small></div>
+    <div class="grp">System</div>
+    <a href="#overview" data-v="overview" class="active">Overview</a>
+    <a href="#llmops" data-v="llmops">LLMOps <span class="n" id="n-llmops"></span></a>
+    <a href="#ops" data-v="ops">Ops <span class="n" id="n-ops"></span></a>
+    <div class="grp">Company</div>
+    <a href="#direction" data-v="direction">Direction <span class="n" id="n-goals"></span></a>
+    <a href="#org" data-v="org">Org <span class="n" id="n-org"></span></a>
+    <a href="#work" data-v="work">Work <span class="n" id="n-work"></span></a>
+    <a href="#delegation" data-v="delegation">Delegation <span class="n" id="n-teams"></span></a>
+    <a href="#runs" data-v="runs">Runs</a>
+    <div class="grp">Memory — lattice &amp; chorus</div>
+    <a href="#episodic" data-v="episodic">Episodic <span class="n" id="n-episodic"></span></a>
+    <a href="#semantic" data-v="semantic">Semantic <span class="n" id="n-semantic"></span></a>
+    <a href="#skills" data-v="skills">Skills <span class="n" id="n-skills"></span></a>
+    <div class="navfoot"><button id="new-playground" hidden>&#10022; New playground</button></div>
+  </nav>
+
+  <main>
+    <header class="pagehead">
+      <h1 id="title">Overview</h1>
+      <div class="sub" id="sub"></div>
+    </header>
+    <div id="view"></div>
+  </main>
+
+  <aside id="dock">
+    <div class="dockhead">Connect</div>
+    <form id="connect-form">
+      <input id="workspace-id" placeholder="workspace id" required />
+      <input id="company-id" placeholder="company id" required />
+      <input id="token" placeholder="API token" type="password" required />
+      <button type="submit">Connect</button>
+    </form>
+    <div class="dockhead">Run the company</div>
+    <form id="run-form">
+      <textarea id="directive" placeholder="Tell the company what to do&hellip;" rows="3" required></textarea>
+      <label class="mode"><input type="checkbox" id="formation-mode" /> Formation &mdash; CEO proposes, you approve</label>
+      <button type="submit">Run</button>
+    </form>
+    <div class="dockhead">Recent runs</div>
+    <ol id="run-log"></ol>
+  </aside>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

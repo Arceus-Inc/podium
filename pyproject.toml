@@ -46,7 +46,7 @@ lattice = { path = "../lattice", editable = true }
 horizon = { path = "../horizon", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/company", "src/podium"]
+packages = ["src/cockpit", "src/podium"]
 
 [tool.ruff]
 line-length = 100
@@ -67,7 +67,7 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "f
 [tool.mypy]
 python_version = "3.11"
 strict = true
-packages = ["company", "podium"]
+packages = ["cockpit", "podium"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]

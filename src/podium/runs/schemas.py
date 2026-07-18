@@ -13,8 +13,12 @@ class RunCreate(BaseModel):
     directive: str
     idempotency_key: str
     # One run resource; execution_mode discriminates (M4 §3.3). Delegation params are
-    # meaningful only in delegation mode and required there — fail at the door.
-    execution_mode: Literal["delivery", "delegation"] = "delivery"
+    # meaningful only in delegation mode and required there — fail at the door. Formation
+    # routes to the CEO, whose proposal waits at the /plans human boundary (CO1).
+    execution_mode: Literal["delivery", "delegation", "formation"] = "delivery"
+    assignee: str | None = (
+        None  # delivery only: direct the run at one employee (default worker otherwise)
+    )
     lead: str | None = None
     goal_id: str | None = None
     max_team_size: int | None = None
@@ -29,7 +33,7 @@ class RunCreate(BaseModel):
     def params(self) -> dict[str, object]:
         """The durable, non-default subset stored on the run row."""
         data: dict[str, object] = {"execution_mode": self.execution_mode}
-        for key in ("lead", "goal_id", "max_team_size", "spend_limit_cents"):
+        for key in ("assignee", "lead", "goal_id", "max_team_size", "spend_limit_cents"):
             value = getattr(self, key)
             if value is not None:
                 data[key] = value
