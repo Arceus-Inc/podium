@@ -42,7 +42,9 @@ from podium.control._routines import (
     UnknownRoutineError,
 )
 from podium.control._workforce import (
+    BudgetView,
     DuplicateEmployee,
+    EmployeeConflict,
     EmployeeView,
     UnknownEmployeeError,
     UnknownRole,
@@ -698,3 +700,78 @@ async def post_task_comment(
         raise HTTPException(status_code=404, detail="task not found") from exc
     except UndeliverableCommentError as exc:
         raise HTTPException(status_code=409, detail="no one to notify on this task") from exc
+
+
+class BudgetPatch(BaseModel):
+    amount_cents: int
+
+
+async def _employee_action(
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    provider: ControlPlaneProvider,
+    act: Callable[[CompanyControlPlane], _T],
+) -> _T:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider, workspace_id=workspace_id, company_id=company_id, read=act
+        )
+    except UnknownEmployeeError as exc:
+        raise HTTPException(status_code=404, detail="employee not found") from exc
+    except EmployeeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/employees/{employee_id}/pause", response_model=EmployeeView)
+async def pause_employee(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    """Board control (OM-4): pause any employee — no new beat dispatches until resumed."""
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.pause(employee_id),
+    )
+
+
+@router.post("/employees/{employee_id}/resume", response_model=EmployeeView)
+async def resume_employee(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> EmployeeView:
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.resume(employee_id),
+    )
+
+
+@router.patch("/employees/{employee_id}/budget", response_model=BudgetView)
+async def patch_employee_budget(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    body: BudgetPatch,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> BudgetView:
+    """Board control (OM-4): the employee's monthly spend cap; the hard ceiling auto-stops."""
+    return await _employee_action(
+        workspace_id=workspace_id, company_id=company_id, actor=actor,
+        sessionmaker=sessionmaker, provider=provider,
+        act=lambda plane: plane.workforce.set_budget(employee_id, amount_cents=body.amount_cents),
+    )

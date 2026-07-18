@@ -244,7 +244,9 @@ async function renderOrg() {
   }
   const lanes = [...state.lanes.entries()].map(([id, lane]) => `
     <article class="lane state-${lane.status}">
-      <header><strong>${esc(lane.name)}</strong> <em>${esc(lane.role)}</em><span class="chip pill">${esc(lane.status)}</span></header>
+      <header><strong>${esc(lane.name)}</strong> <em>${esc(lane.role)}</em><span class="chip pill">${esc(lane.status)}</span>
+        ${lane.status === "terminated" ? "" : `<button class="employee-act" data-employee="${esc(id)}" data-act="${lane.status === "paused" ? "resume" : "pause"}" title="board control — a paused employee dispatches no new beats">${lane.status === "paused" ? "Resume" : "Pause"}</button>`}
+      </header>
       <div class="lane-task">${lane.taskId ? `task ${esc(lane.taskId.slice(0, 8))}…` : "—"}</div>
       <ol class="lane-events">${lane.lastEvents.map((e) => `<li>${esc(e.type)}</li>`).join("")}</ol>
     </article>`).join("");
@@ -410,6 +412,15 @@ function wireView() {
         await api2("POST", `/tasks/${taskId}/comments`, { body: $("comment-body").value });
         link.onclick(e);
       };
+    };
+  });
+  document.querySelectorAll(".employee-act").forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.preventDefault();
+      await api2("POST", `/employees/${btn.dataset.employee}/${btn.dataset.act}`, {});
+      const lane = state.lanes.get(btn.dataset.employee);
+      if (lane) lane.status = btn.dataset.act === "pause" ? "paused" : "idle";
+      render();
     };
   });
   document.querySelectorAll(".routine-act").forEach((btn) => {
