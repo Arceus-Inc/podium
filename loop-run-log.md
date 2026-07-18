@@ -118,3 +118,17 @@ commits) → what ran → outcome → spend.
   nudge, budget-warn, task-assigned ack) → P1 lean brief rewrite (start: delegation brief +
   backend engineer) → D (delegation smoothing: depends_on default guidance in decompose refusals)
   → R (routine quality pass) → mind-map doc + e2e round 3.
+
+## Iteration 7 — 2026-07-18 ~17:20 (P1 landed)
+
+- **P1 (worktree agent, merged chorus bc209ff)**: backend brief 2764→~871 tokens, frontend
+  2460→~799. Enforced prohibitions deleted (TDD gate + evidence ratchet + validators hold
+  them); craft procedure moved to skills (§6 structuring-any-service; vite/playwright recipes
+  already in skills — duplication deleted, pointers kept); tool call-procedure verified to
+  live on the tools. New budget+anatomy tests pin the lean form (≤900 tokens, subagents named,
+  manager escalation, deliverable class). 459 employee tests green; ruff/mypy clean.
+- Restart armed for next quiet window → videocursor's be corrective becomes the live P1+it.5
+  proof (lean brief + read-only-aware gate together).
+- Next: H2 pre-dispatch validation, H3 routine durable-next-path gate, H4 budget auto-pause
+  check, H5 onboarding beat, H6 typed interactions; then designer/marketer/pm brief pass;
+  mind-map doc; e2e round 3.
