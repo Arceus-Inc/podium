@@ -1,6 +1,6 @@
 # Loop State — Arceus free-runner
 
-Last run: iteration 3 — 2026-07-18 ~15:20
+Last run: iteration 6 — 2026-07-18 ~17:15
 
 ## Live context
 
@@ -14,14 +14,23 @@ Last run: iteration 3 — 2026-07-18 ~15:20
   formation task cycling in_progress/blocked.
 - Checklist: docs/plans/2026-07-18-company-freerun-checklist.md (#4-#9 fixed this session).
 
-## High priority (act)
+## High priority (act) — the user's five-item checklist drives everything now
 
-1. LINKPORT KILLED (user directive). Focus = videocursor
-   (co 019f747d-d5b4-7124-8e6f-bbc866827671).
-2. Watch the lead's corrective dispatches for be/analyst/designer; web tools now live —
-   analyst/marketer re-runs should cite real URLs.
-3. If a corrective repeats its predecessor's failure verbatim, fix child-intent/DoD
-   alignment (lead paraphrase drift) in the delegation brief.
+1. HOOKS: org layer v1 shipped (chorus.hooks, delegatory message hook). NEXT: consume the
+   background research agent's hook-event table; add child-rejected/budget-warn/task-assigned
+   hooks; consider activating dream's dormant beat-level hooks from the chorus factory.
+2. LEAN BRIEFS (P1): rewrite role briefs in principled Codex style (persona/communication/
+   autonomy, no procedural hardcode); start with DELEGATION_BRIEF + backend engineer; verify
+   live on videocursor beats. Research agent covers best practice.
+3. SMOOTHER DELEGATION: v2 proved verbatim-module briefs + depends_on work — encode those as
+   engine affordances (decompose refusal teaching, default child-brief scaffold), not prompt
+   ritual.
+4. ROUTINES: verify pm weekly (record_decision) + slo/dependency scans PASS under the new
+   report DoD on the next firings.
+5. RESEARCH/MIND-MAP: paperclip re-read + Polsia + autonomous-OS scan (agent running);
+   write docs/plans/mind-map comparing a real human company's loop to ours; add checklist
+   items from gaps. Videocursor v2: be corrective is the last module; run e2e round 3 after
+   the brief/hook changes land.
 
 ## Watch list
 

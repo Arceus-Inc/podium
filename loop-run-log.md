@@ -95,3 +95,26 @@ commits) → what ran → outcome → spend.
   production. Mutations stay locked until RED.
 - **Ran**: gate + harness suites green; ruff+mypy clean. Restart armed for the next
   between-beats window so the lead's be corrective runs on the fixed gate.
+
+## Iteration 6 — 2026-07-18 ~17:15 (user checklist absorbed)
+
+- **User checklist (verbatim intent)**: 1) hooks in dream+org (message as a hook, delegatory
+  reactions, explore surface) 2) lean principled briefs (Codex-style; de-hardcode; research)
+  3) smoother delegation 4) routines that truly drive autonomy 5) study paperclip/Polsia/other
+  autonomous OS. Method: deep research → TDD build → e2e on videocursor → mind-map gap vs a
+  real human company → repeat indefinitely.
+- **Discovery**: dream ALREADY ships a full beat-level hook system (spec 13: session/prompt/
+  pre+post-tool/compact/subagent/stop events, observer-only executor, plugin loading) — dormant
+  in our product. The missing layer was ORG-level hooks.
+- **Built (chorus 7c7c2e7)**: `chorus.hooks` — pulse-phase deterministic reactions (idempotent,
+  crash-isolated, no model calls): pulse = recover → cron → ORG HOOKS → monitors → dispatch.
+  First built-in: delegatory message hook — INSTRUCTION message → real todo task for the
+  recipient (fingerprint message:<id>, thread goal inherited), inbox nudge consumed. 4 tests.
+- **In flight**: background research agent on (a) hook-surface table for agent orgs (claude
+  code hooks, paperclip triggers, Polsia/autonomous-OS scan) (b) lean-brief best practice.
+  Videocursor v2: 4/5 modules done (analyst/marketer/designer/fe), lead integrating, be
+  corrective pending on the fixed TDD gate; 2 gate-free executive reviews.
+- **Next iterations**: consume research → full hook-event table (child-rejected → corrective
+  nudge, budget-warn, task-assigned ack) → P1 lean brief rewrite (start: delegation brief +
+  backend engineer) → D (delegation smoothing: depends_on default guidance in decompose refusals)
+  → R (routine quality pass) → mind-map doc + e2e round 3.
