@@ -485,9 +485,27 @@ class Operator:
             try:
                 org = await self.org()
                 leads = self.leads(org)
+                # AUTHORITATIVE completion: the engine flips the ledger goal to 'done' when its
+                # delegation-root task lands done. Trust that over the product-run status, which can
+                # loop or false-pass. Map ledger goal id -> status for this cycle (ids come back from
+                # asyncpg as UUID objects; goal_runs keys are strings, so normalise with str()).
+                ledger_goal_status = {str(g["id"]): g["status"] for g in org["goals"]}
                 # refresh statuses of in-flight goal runs
                 for gid, info in list(self.goal_runs.items()):
-                    if info.get("run_id") and info["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done"):
+                    terminal = ("succeeded", "failed", "canceled", "timed_out", "done")
+                    if info["status"] in terminal:
+                        continue
+                    # (a) ledger goal rolled up to done -> retire it and let goal_daemon queue next
+                    if ledger_goal_status.get(gid) == "done":
+                        info["status"] = "done"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='done',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' COMPLETED (ledger roll-up)")
+                        continue
+                    # (b) fall back to the delegation product-run terminal status
+                    if info.get("run_id"):
                         st = await self.run_status(info["run_id"])
                         if st and st["status"] in ("succeeded", "failed", "canceled", "timed_out"):
                             info["status"] = st["status"]
