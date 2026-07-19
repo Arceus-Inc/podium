@@ -7,3 +7,8 @@ __pycache__/
 .ruff_cache/
 uv.lock
 .chorus/
+
+# overnight autonomous run artifacts
+.monitor-runs/
+.podium/
+

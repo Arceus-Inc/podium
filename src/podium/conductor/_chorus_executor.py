@@ -14,6 +14,7 @@ The uuid→str conversions at `CompanyConfig`/workdir are that boundary, made ex
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,10 +44,11 @@ _TERMINAL: dict[TaskStatus, RunStatus] = {
 @dataclass
 class _CompanyRuntime:
     graph: CompanyGraph
-    assignee: str
+    assignee: str  # default delivery fallback = the CEO seat; no fake IC is pre-seeded
     ceo: str  # formation runs route here — the one employee with governance tools
     mirror: EventMirror
     ingest: EventIngest
+    horizon_stop: Callable[[], None] | None = None  # unsubscribe handle for the feedback listener
 
 
 class CompanyGraphHost:
@@ -84,14 +86,15 @@ class CompanyGraphHost:
                 workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
                 company_id=str(company_id),
                 ledger_dsn=self._engine_ledger_dsn,
+                # A real company runs many teams at once; the default (3) serialises an 18-person
+                # org down to a trickle and starves delegated beats. Give the heartbeat room.
+                max_concurrent_runs=16,
             )
         )
-        # ponytail: one hardcoded worker to make runs executable; the CEO's approved workforce
-        # plan materializes the real org. Idempotent: a saga retry (built, idle-flip failed)
-        # finds both already hired in the engine store.
-        worker = graph.org._ledger.employees.get("ace") or graph.org.hire(
-            name="Ace", role="backend_engineer"
-        )
+        # The CEO is the one always-present seat: formation routes here to propose the real
+        # workforce, and an unassigned delivery run falls back here (the buck stops at the CEO)
+        # until an approved org exists. No fake IC is pre-seeded — a hardcoded "ace" made the org
+        # look staffed when it was not. Idempotent: a saga retry finds casey already hired.
         ceo = graph.org._ledger.employees.get("casey") or graph.org.hire(name="Casey", role="ceo")
         mirror = EventMirror(
             self._app_sm,
@@ -103,8 +106,18 @@ class CompanyGraphHost:
         ingest = EventIngest(graph.org._event_bus, mirror, resolve_root=_root_resolver(graph))
         ingest.start()
         graph.org.start()  # the always-on heartbeat: wakes and routines pulse until aclose
+        # offline-fix #1: subscribe horizon's outcome-feedback loop. Without this, the OutcomeListener
+        # never binds, so goal health/score/priority never react to execution and the direction report
+        # stays empty. start() returns the unsubscribe handle we release on teardown (matches horizon's
+        # own company_loop_e2e, which calls horizon.start()).
+        horizon_stop = graph.horizon.start()
         runtime = _CompanyRuntime(
-            graph=graph, assignee=worker.name, ceo=ceo.name, mirror=mirror, ingest=ingest
+            graph=graph,
+            assignee=ceo.name,  # unassigned delivery stops at the CEO — no fake IC seeded
+            ceo=ceo.name,
+            mirror=mirror,
+            ingest=ingest,
+            horizon_stop=horizon_stop,
         )
         # The provisioning saga's happy edge: the graph built and the engine store is live, so the
         # company leaves `provisioning`. Any failure up to and INCLUDING the flip leaves the
@@ -113,6 +126,7 @@ class CompanyGraphHost:
             async with tenant_session(self._app_sm, workspace_id) as session:
                 await mark_company_idle(session, company_id)
         except BaseException:
+            horizon_stop()
             await graph.org.stop()
             await ingest.stop()
             graph.close()
@@ -141,11 +155,13 @@ class CompanyGraphHost:
             path = self._workdir / str(company_id) / "direction-report.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(runtime.graph.horizon.report(), encoding="utf-8")
-        except OSError:
+        except Exception:  # noqa: BLE001 -- a report that can't be written must never fail a run
             logger.warning("direction_report_write_failed", company_id=str(company_id))
 
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
+            if runtime.horizon_stop is not None:
+                runtime.horizon_stop()  # unbind the outcome-feedback listener
             await runtime.graph.org.stop()  # drain in-flight beats before the ledger goes away
             await runtime.ingest.stop()
             runtime.graph.close()  # the company's live Postgres connection
@@ -159,9 +175,11 @@ _FORMATION_CONTRACT = (
     "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
     "contains one proposed plan in which every hire names a catalog profession, a reporting "
     "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
-    "parser module' — leads later use these to pick assignees); any lead expected to delegate "
-    "holds a bounded management grant (can_lead=true, max_delegation_depth >= 1, max_team_size "
-    "covering itself plus its reports); every budget allocation is bounded; and "
+        "parser module' — leads later use these to pick assignees); the org is NOT flat — when the "
+        "objective needs more than one specialist, at least one hire holds a bounded management "
+        "grant (can_lead=true, max_delegation_depth >= 1, max_team_size covering itself plus its "
+        "reports) and the other hires report to that lead rather than to the CEO; every budget "
+        "allocation is bounded; and "
     "`governance-ledger.md` records the proposal line. Tool-call ordering is NOT observable "
     "and is never an acceptance criterion. The plan stays pending for a human decision; never "
     "claim anyone was hired. Then stop.\n\n## Objective\n"
