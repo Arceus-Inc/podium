@@ -67,9 +67,11 @@ ROADMAP: list[tuple[str, str]] = [
      "scale, and base components (button, card, input, dialog) with docs. Ship runnable npm "
      "scripts and unit tests with captured evidence."),
     ("Lumen brand & voice guide",
-     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
-     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
-     "a well-structured written guide document with concrete examples."),
+     "Deliver Lumen's brand as the designer's STANDARD, verifiable artifacts (not a free-form file): a "
+     "DESIGN.md brand system with a color/palette section (calm brand tokens) and a typography scale and "
+     "visual theme, and a design_spec.md with a tokens/components section, a states section, and an "
+     "accessibility section. Fold the logo usage rules, tone-of-voice principles, and example "
+     "copy/taglines into those two documents. Land DESIGN.md and design_spec.md."),
     ("Pomodoro focus timer",
      "Deliver a Pomodoro focus timer web app: configurable work/break intervals, start/pause/reset, "
      "a session history, gentle end-of-interval notification, and a calm minimal UI. Ship runnable "
@@ -79,9 +81,10 @@ ROADMAP: list[tuple[str, str]] = [
      "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
      "and unit tests with captured evidence."),
     ("Go-to-market content & SEO plan",
-     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
-     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
-     "ready for review."),
+     "Deliver Lumen's go-to-market plan as the marketer's STANDARD, verifiable artifact (not a free-form "
+     "file): a single substantive content_draft.md (>= 300 words) containing landing-page copy, three "
+     "blog-post outlines, an SEO keyword map, and a four-week social launch calendar. Land "
+     "content_draft.md."),
     ("Daily habit tracker",
      "Deliver a daily habit tracker: add/remove habits, mark done per day, a streak view and a "
      "weekly grid, localStorage persistence, and a calm accessible UI. Ship runnable npm scripts "
