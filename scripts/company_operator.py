@@ -38,6 +38,9 @@ STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
 MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
+# Below this, ramp up to form a couple of viable pods; at/above it, only hire on REAL demand
+# (an open staffing request from a lead). Growth is PULL, not push.
+MIN_VIABLE_HEADCOUNT = int(os.environ.get("OPERATOR_MIN_VIABLE_HEADCOUNT", "8"))
 MAX_ACTIVE_GOALS = int(os.environ.get("OPERATOR_MAX_ACTIVE_GOALS", "3"))
 DELEGATION_SPEND_LIMIT_CENTS = 5_000_000  # generous per-goal budget
 
@@ -380,7 +383,8 @@ class Operator:
                     await asyncio.sleep(15)
                     continue
                 org = await self.org()
-                headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
+                emps = [e for e in org["employees"] if e["status"] != "terminated"]
+                headcount = len(emps)
                 open_reqs = [r for r in org["staffing"] if str(r["status"]).lower() == "open"]
                 bottlenecks = self.bottleneck_professions(org)
                 if headcount >= MAX_HEADCOUNT:
@@ -388,7 +392,23 @@ class Operator:
                     # don't waste formation beats churning against the ceiling.
                     await asyncio.sleep(30)
                     continue
-                if headcount < TARGET_HEADCOUNT or open_reqs or bottlenecks:
+                # PULL-BASED growth (audit A4): hire only on REAL demand, never on a push signal.
+                #  (a) a lead filed an open staffing_request (someone actually asked), or
+                #  (b) initial ramp: the org is still below a minimal viable size AND nobody is idle.
+                # Never hire while ICs are already sitting idle with no task — that is how the org
+                # ballooned to 18 with 11 people who never did anything.
+                assigned = {t["assignee_employee_id"] for t in org["tasks"] if t["assignee_employee_id"]}
+                idle_ics = [
+                    e for e in emps
+                    if e["role"] != "ceo" and not e["can_lead"] and e["id"] not in assigned
+                ]
+                want_growth = bool(open_reqs) or (
+                    headcount < MIN_VIABLE_HEADCOUNT and len(idle_ics) < 2
+                )
+                if not want_growth:
+                    await asyncio.sleep(30)
+                    continue
+                if True:
                     self._expansion_inflight = True
                     bottleneck_line = ""
                     if bottlenecks:
