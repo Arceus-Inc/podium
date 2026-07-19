@@ -50,16 +50,35 @@ MISSION = (
 )
 
 # The rolling product roadmap — each becomes a goal + a delegation run. When exhausted, the operator
-# generates follow-on iterations so the company never runs out of work (no ultimate DoD).
+# generates follow-on iterations so the company never runs out of work (no ultimate DoD). The order
+# INTERLEAVES disciplines (frontend / design / marketing / analytics) so the goals that are active
+# concurrently fan out to DIFFERENT discipline leads and their teams work in parallel, rather than
+# piling three frontend builds onto a single lead.
 ROADMAP: list[tuple[str, str]] = [
     ("Calm markdown notes app",
      "Deliver a distraction-free markdown notes app: split editor + live preview, autosave to "
      "localStorage with restore, safe (sanitized) rendering, a calming theme, and keyboard "
      "shortcuts. Ship runnable npm scripts and unit + Playwright e2e tests with captured evidence."),
+    ("Calm design system",
+     "Deliver a shared calm design system package: color tokens, a typography scale, spacing "
+     "scale, and base components (button, card, input, dialog) with docs. Ship runnable npm "
+     "scripts and unit tests with captured evidence."),
+    ("Lumen brand & voice guide",
+     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
+     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
+     "a well-structured written guide document with concrete examples."),
     ("Pomodoro focus timer",
      "Deliver a Pomodoro focus timer web app: configurable work/break intervals, start/pause/reset, "
      "a session history, gentle end-of-interval notification, and a calm minimal UI. Ship runnable "
      "npm scripts and unit + e2e tests with captured evidence."),
+    ("Privacy-first analytics helper",
+     "Deliver a privacy-first analytics helper module: a small event-tracking API, a localStorage "
+     "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
+     "and unit tests with captured evidence."),
+    ("Go-to-market content & SEO plan",
+     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
+     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
+     "ready for review."),
     ("Daily habit tracker",
      "Deliver a daily habit tracker: add/remove habits, mark done per day, a streak view and a "
      "weekly grid, localStorage persistence, and a calm accessible UI. Ship runnable npm scripts "
@@ -68,22 +87,6 @@ ROADMAP: list[tuple[str, str]] = [
      "Deliver a marketing landing site for Lumen that ties the apps together: hero, a feature "
      "section per app, responsive layout, strong accessibility, and the calm brand. Ship runnable "
      "npm scripts and Playwright e2e tests with captured evidence."),
-    ("Calm design system",
-     "Deliver a shared calm design system package: color tokens, a typography scale, spacing "
-     "scale, and base components (button, card, input, dialog) with docs. Ship runnable npm "
-     "scripts and unit tests with captured evidence."),
-    ("Privacy-first analytics helper",
-     "Deliver a privacy-first analytics helper module: a small event-tracking API, a localStorage "
-     "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
-     "and unit tests with captured evidence."),
-    ("Lumen brand & voice guide",
-     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
-     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
-     "a well-structured written guide document with concrete examples."),
-    ("Go-to-market content & SEO plan",
-     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
-     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
-     "ready for review."),
 ]
 
 
@@ -261,9 +264,46 @@ class Operator:
         return {e["role"] for e in org["employees"]
                 if e["reports_to"] == lead_id and e["status"] != "terminated"}
 
+    @staticmethod
+    def bottleneck_professions(org: dict[str, Any]) -> list[tuple[str, int, int]]:
+        """Disciplines whose queued delivery work outstrips their IC headcount.
+
+        Returns a ranked list of ``(profession, backlog, ic_count)`` for professions where the
+        number of unfinished delivery tasks assigned to that profession is >= 2 per IC. This lets
+        growth add capacity where beats are actually queuing up (e.g. a single frontend engineer
+        carrying every app build) instead of hiring blindly toward a headcount target.
+        """
+        by_id = {e["id"]: e for e in org["employees"] if e["status"] != "terminated"}
+        ic_count: dict[str, int] = {}
+        for e in by_id.values():
+            if e["role"] in ("ceo",) or e["can_lead"]:
+                continue
+            ic_count[e["role"]] = ic_count.get(e["role"], 0) + 1
+        backlog: dict[str, int] = {}
+        for t in org["tasks"]:
+            if t["execution_mode"] != "delivery" or t["status"] not in ("todo", "in_progress"):
+                continue
+            emp = by_id.get(t["assignee_employee_id"])
+            if not emp or emp["role"] == "ceo" or emp["can_lead"]:
+                continue
+            backlog[emp["role"]] = backlog.get(emp["role"], 0) + 1
+        ranked: list[tuple[str, int, int]] = []
+        for prof, load in backlog.items():
+            heads = ic_count.get(prof, 0)
+            if load >= 2 and load >= 2 * max(heads, 1):
+                ranked.append((prof, load, heads))
+        ranked.sort(key=lambda x: (-(x[1] / max(x[2], 1)), -x[1]))
+        return ranked
+
     def pick_lead_for_goal(self, org: dict[str, Any], leads: list[dict[str, Any]],
                            title: str, brief: str, load: dict[str, int]) -> dict[str, Any] | None:
-        """Route a goal to the lead whose team best covers its needs, least-loaded first."""
+        """Route a goal to a capable lead, spreading work so teams run in parallel.
+
+        A lead is *eligible* if its team covers at least one of the goal's needs (otherwise its
+        beats would fail). Among eligible leads we pick the LEAST-LOADED first so concurrent goals
+        fan out to different teams instead of piling onto the single broadest lead; coverage is only
+        the final tie-break. This keeps "a few people on one goal, others on others".
+        """
         if not leads:
             return None
         needs = self.goal_needs(title, brief)
@@ -271,13 +311,14 @@ class Operator:
         for ld in leads:
             roles = self.team_roles(org, ld["id"])
             coverage = len(needs & roles)
-            scored.append((coverage, -load.get(ld["id"], 0), len(roles), ld))
-        scored.sort(key=lambda s: (s[0], s[1], s[2]), reverse=True)
+            eligible = 1 if coverage >= 1 else 0
+            scored.append((eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
+        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3]), reverse=True)
         best = scored[0]
         # If nobody can cover ANY need, don't hand it to an incapable lead — wait for a better fit.
         if best[0] == 0:
             return None
-        return best[3]
+        return best[4]
 
     # ---- daemons --------------------------------------------------------
     async def approvals_daemon(self) -> None:
@@ -338,13 +379,26 @@ class Operator:
                 org = await self.org()
                 headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
                 open_reqs = [r for r in org["staffing"] if str(r["status"]).lower() == "open"]
+                bottlenecks = self.bottleneck_professions(org)
                 if headcount >= MAX_HEADCOUNT:
                     # at the hard cap — any expansion plan will be rejected on approval, so
                     # don't waste formation beats churning against the ceiling.
                     await asyncio.sleep(30)
                     continue
-                if headcount < TARGET_HEADCOUNT or open_reqs:
+                if headcount < TARGET_HEADCOUNT or open_reqs or bottlenecks:
                     self._expansion_inflight = True
+                    bottleneck_line = ""
+                    if bottlenecks:
+                        parts = ", ".join(
+                            f"{prof} ({load} queued task(s) / {heads} IC(s))"
+                            for prof, load, heads in bottlenecks[:3]
+                        )
+                        bottleneck_line = (
+                            " These disciplines are OVERLOADED and are the current throughput "
+                            f"bottleneck: {parts}. PRIORITIZE adding more ICs in these professions "
+                            "under their existing discipline lead so the queued work parallelizes "
+                            "across several people instead of one."
+                        )
                     directive = (
                         "Expand the permanent workforce so the company is fully staffed for its "
                         f"mission and roadmap. Current permanent headcount is {headcount}; the "
@@ -357,6 +411,7 @@ class Operator:
                         "profession — do NOT create additional leads for a discipline that already "
                         "has one, and NEVER leave an IC reporting to the CEO. Only the leads report "
                         "to the CEO. Keep the org non-flat and at most two layers below the CEO."
+                        + bottleneck_line
                     )
                     await self.submit_run("formation", directive)
                     # wait (up to ~150s) for the approval daemon to clear the flag, else clear it
