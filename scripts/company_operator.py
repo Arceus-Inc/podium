@@ -299,10 +299,12 @@ class Operator:
                            title: str, brief: str, load: dict[str, int]) -> dict[str, Any] | None:
         """Route a goal to a capable lead, spreading work so teams run in parallel.
 
-        A lead is *eligible* if its team covers at least one of the goal's needs (otherwise its
-        beats would fail). Among eligible leads we pick the LEAST-LOADED first so concurrent goals
-        fan out to different teams instead of piling onto the single broadest lead; coverage is only
-        the final tie-break. This keeps "a few people on one goal, others on others".
+        Preference order per lead: (1) does the team FULLY cover the goal's needs — a lead whose
+        team has every required profession can execute the goal end-to-end; (2) is it *eligible* at
+        all (covers >=1 need — otherwise its beats fail); (3) LEAST-LOADED first so concurrent goals
+        fan out to different teams rather than piling onto one; (4) coverage as the final tie-break.
+        Preferring full coverage keeps capability correct, while the load term still spreads work
+        whenever several leads are equally capable — "a few on one goal, others on others".
         """
         if not leads:
             return None
@@ -311,14 +313,15 @@ class Operator:
         for ld in leads:
             roles = self.team_roles(org, ld["id"])
             coverage = len(needs & roles)
+            full = 1 if needs and coverage == len(needs) else 0
             eligible = 1 if coverage >= 1 else 0
-            scored.append((eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
-        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3]), reverse=True)
+            scored.append((full, eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
+        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3], s[4]), reverse=True)
         best = scored[0]
         # If nobody can cover ANY need, don't hand it to an incapable lead — wait for a better fit.
-        if best[0] == 0:
+        if best[1] == 0:
             return None
-        return best[4]
+        return best[5]
 
     # ---- daemons --------------------------------------------------------
     async def approvals_daemon(self) -> None:
@@ -404,13 +407,16 @@ class Operator:
                         f"mission and roadmap. Current permanent headcount is {headcount}; the "
                         f"company should be about {TARGET_HEADCOUNT} people. Propose amendments that "
                         "satisfy EVERY open staffing request (use each staffing_request_id), and add "
-                        "the ICs the roadmap needs so several teams can work in parallel across "
-                        "design, frontend, backend, product/PM, QA/analyst, and marketing. Build a "
-                        "real pyramid: keep FEW leads (one per discipline, ~3-5 total) and add the "
-                        "new hires as ICs REPORTING TO the existing discipline lead for their "
-                        "profession — do NOT create additional leads for a discipline that already "
-                        "has one, and NEVER leave an IC reporting to the CEO. Only the leads report "
-                        "to the CEO. Keep the org non-flat and at most two layers below the CEO."
+                        "the ICs the roadmap needs so several CROSS-FUNCTIONAL PODS can each ship a "
+                        "goal end-to-end in parallel. Build balanced pods: each pod is ONE lead plus "
+                        "a MIX of a designer, one or two frontend engineers, and a QA/test analyst "
+                        "(add a backend engineer or marketer where the goals need it) — do NOT "
+                        "create single-discipline silo teams. First BALANCE existing pods by adding "
+                        "the missing profession UNDER an existing pod lead (set reports_to to that "
+                        "lead); reuse existing leads and only add a NEW pod lead when there is enough "
+                        "parallel work for another full balanced pod. NEVER leave an IC reporting to "
+                        "the CEO. Only pod leads report to the CEO. Keep the org non-flat and at most "
+                        "two layers below the CEO."
                         + bottleneck_line
                     )
                     await self.submit_run("formation", directive)
