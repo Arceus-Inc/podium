@@ -510,9 +510,22 @@ class Operator:
                 # loop or false-pass. Map ledger goal id -> status for this cycle (ids come back from
                 # asyncpg as UUID objects; goal_runs keys are strings, so normalise with str()).
                 ledger_goal_status = {str(g["id"]): g["status"] for g in org["goals"]}
+                # A goal whose delegation gave up — root delegation task BLOCKED with an active
+                # "integrate_iteration_exhausted" recovery — is STRANDED (its subtasks never
+                # converged, e.g. a subjective written deliverable the reviewer kept rejecting). A
+                # real company shelves a stuck goal and moves on rather than letting it clog the
+                # active-goal slots forever, so retire it and let goal_daemon queue the next one.
+                stranded_rows = await self.q(
+                    "select distinct t.goal_id from task t "
+                    "join recovery_action ra on ra.source_task_id=t.id and ra.company_id=t.company_id "
+                    "where t.company_id=$1 and t.execution_mode='delegation' and t.parent_id is null "
+                    "and t.status='blocked' and ra.status='active' "
+                    "and ra.cause='integrate_iteration_exhausted'",
+                    uuid.UUID(self.co))
+                stranded = {str(r["goal_id"]) for r in stranded_rows if r["goal_id"]}
                 # refresh statuses of in-flight goal runs
                 for gid, info in list(self.goal_runs.items()):
-                    terminal = ("succeeded", "failed", "canceled", "timed_out", "done")
+                    terminal = ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
                     if info["status"] in terminal:
                         continue
                     # (a) ledger goal rolled up to done -> retire it and let goal_daemon queue next
@@ -523,6 +536,15 @@ class Operator:
                                         (now(), gid))
                         self.db.commit()
                         self.log(f"goal '{info['title'][:40]}' COMPLETED (ledger roll-up)")
+                        continue
+                    # (a2) delegation stranded (never converged) -> shelve it, free the slot
+                    if gid in stranded:
+                        info["status"] = "stranded"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='stranded',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' SHELVED (delegation stranded — moving on)", "warn")
                         continue
                     # (b) fall back to the delegation product-run terminal status
                     if info.get("run_id"):
@@ -537,7 +559,7 @@ class Operator:
                             self.db.commit()
                             self.log(f"goal '{info['title'][:40]}' finished ({st['status']})")
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")]
                 running = [i for i in active if i.get("run_id")]
                 # current load per lead (running goals already assigned to them)
                 load: dict[str, int] = {}
@@ -570,7 +592,7 @@ class Operator:
         while True:
             try:
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")]
                 if len(active) < MAX_ACTIVE_GOALS:
                     title, brief = self.next_roadmap_item()
                     existing_titles = {i["title"] for i in self.goal_runs.values()}
@@ -603,7 +625,7 @@ class Operator:
                 running = sum(1 for t in tasks if t["status"] in ("in_progress", "IN_PROGRESS"))
                 goals_done = sum(1 for i in self.goal_runs.values() if i["status"] in ("done", "succeeded"))
                 goals_active = len([i for i in self.goal_runs.values()
-                                    if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")])
+                                    if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")])
                 assert self.db is not None
                 self.db.execute(
                     "INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
