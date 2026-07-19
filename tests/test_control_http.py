@@ -377,6 +377,51 @@ async def test_allocation_snapshot_reads_ledger_truth(
     assert isinstance(body["blocked"], list)
 
 
+async def test_allocation_surfaces_gated_todos_and_blocked_status(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    """F8: a dependency-gated todo (no wake) is waiting work, and a `blocked`-status parent is
+    blocked work — both must show even though the liveness classifier deems them healthy."""
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger, Task, TaskStatus
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="al2")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        # A blocker still open, and a todo gated on it — no wake enqueued for the gated task.
+        blocker = mint_id()
+        ledger.tasks.submit(Task(id=blocker, intent="do first", assignee_employee_id="ada"))
+        ledger.tasks.set_status(blocker, TaskStatus.TODO)
+        gated = mint_id()
+        ledger.tasks.submit(Task(id=gated, intent="then me", assignee_employee_id="ada"))
+        ledger.tasks.set_status(gated, TaskStatus.TODO)
+        ledger.dependencies.add(gated, blocker)
+        # A parent parked awaiting its subtree — `blocked` status, classifier calls it healthy.
+        parent = mint_id()
+        ledger.tasks.submit(Task(id=parent, intent="await subtree", assignee_employee_id="ada"))
+        ledger.tasks.set_status(parent, TaskStatus.BLOCKED)
+    finally:
+        ledger.close()
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/allocation",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    queued_by_task = {q["task_id"]: q for q in body["queued"] if q["task_id"]}
+    # Both todos are waiting work (no wake, not running); reasons distinguish gated vs awaiting.
+    assert queued_by_task[gated]["reason"] == "dependency_blocked"
+    assert queued_by_task[blocker]["reason"] == "awaiting_dispatch"
+    # The blocked-status parent is visible even though it is "healthy" to the classifier.
+    assert parent in {t["task_id"] for t in body["blocked"]}
+
+
 async def test_costs_door_aggregates_spend(
     database_url: str,
     sessionmaker: async_sessionmaker[AsyncSession],
