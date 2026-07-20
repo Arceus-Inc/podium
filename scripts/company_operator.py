@@ -38,55 +38,64 @@ STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
 MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
+# Below this, ramp up to form a couple of viable pods; at/above it, only hire on REAL demand
+# (an open staffing request from a lead). Growth is PULL, not push.
+MIN_VIABLE_HEADCOUNT = int(os.environ.get("OPERATOR_MIN_VIABLE_HEADCOUNT", "8"))
 MAX_ACTIVE_GOALS = int(os.environ.get("OPERATOR_MAX_ACTIVE_GOALS", "3"))
 DELEGATION_SPEND_LIMIT_CENTS = 5_000_000  # generous per-goal budget
 
-MISSION = (
-    "Found and operate 'Lumen', a calm-productivity startup. Build a suite of small, beautiful, "
-    "privacy-first web apps that help people focus: a distraction-free markdown notes app, a "
-    "Pomodoro focus timer, a daily habit tracker, and a marketing landing site that ties them "
-    "together, on a shared calm design system. Staff the company to design, build, test, and "
-    "document these in parallel, with engineering and design leads coordinating their own teams."
+# A goal run is RETIRED (its active-goal slot freed) once it reaches any of these. 'done' is the
+# engine's authoritative ledger roll-up; 'stranded' is a delegation that gave up and was shelved.
+TERMINAL_GOAL_STATUSES = ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
+
+MISSION = os.environ.get(
+    "OPERATOR_MISSION",
+    "Found and operate 'Clipper', building 'Cursor for video editors' — an AI-native video editing "
+    "tool where editors work on a timeline with an AI copilot that suggests cuts, edits from the "
+    "transcript, and automates tedious editing. Staff the company to design, build, test, and "
+    "document the product in parallel, with engineering, AI, and design leads coordinating their "
+    "own teams across the editor UI, the AI edit-assist service, and the render pipeline.",
 )
 
 # The rolling product roadmap — each becomes a goal + a delegation run. When exhausted, the operator
 # generates follow-on iterations so the company never runs out of work (no ultimate DoD). The order
-# INTERLEAVES disciplines (frontend / design / marketing / analytics) so the goals that are active
-# concurrently fan out to DIFFERENT discipline leads and their teams work in parallel, rather than
-# piling three frontend builds onto a single lead.
+# INTERLEAVES disciplines (frontend / ai-backend / design / marketing / analytics) so the goals that
+# are active concurrently fan out to DIFFERENT discipline leads and their teams work in parallel,
+# rather than piling three frontend builds onto a single lead.
 ROADMAP: list[tuple[str, str]] = [
-    ("Calm markdown notes app",
-     "Deliver a distraction-free markdown notes app: split editor + live preview, autosave to "
-     "localStorage with restore, safe (sanitized) rendering, a calming theme, and keyboard "
-     "shortcuts. Ship runnable npm scripts and unit + Playwright e2e tests with captured evidence."),
-    ("Calm design system",
-     "Deliver a shared calm design system package: color tokens, a typography scale, spacing "
-     "scale, and base components (button, card, input, dialog) with docs. Ship runnable npm "
-     "scripts and unit tests with captured evidence."),
-    ("Lumen brand & voice guide",
-     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
-     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
-     "a well-structured written guide document with concrete examples."),
-    ("Pomodoro focus timer",
-     "Deliver a Pomodoro focus timer web app: configurable work/break intervals, start/pause/reset, "
-     "a session history, gentle end-of-interval notification, and a calm minimal UI. Ship runnable "
-     "npm scripts and unit + e2e tests with captured evidence."),
-    ("Privacy-first analytics helper",
-     "Deliver a privacy-first analytics helper module: a small event-tracking API, a localStorage "
-     "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
-     "and unit tests with captured evidence."),
-    ("Go-to-market content & SEO plan",
-     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
-     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
-     "ready for review."),
-    ("Daily habit tracker",
-     "Deliver a daily habit tracker: add/remove habits, mark done per day, a streak view and a "
-     "weekly grid, localStorage persistence, and a calm accessible UI. Ship runnable npm scripts "
-     "and unit + e2e tests with captured evidence."),
-    ("Lumen landing site",
-     "Deliver a marketing landing site for Lumen that ties the apps together: hero, a feature "
-     "section per app, responsive layout, strong accessibility, and the calm brand. Ship runnable "
-     "npm scripts and Playwright e2e tests with captured evidence."),
+    ("Timeline editor core",
+     "Deliver the core video timeline editor (web): multi-track timeline with clips, a playhead, "
+     "trim/split/move on clips, zoom, and a preview pane wired to a sample video. Ship runnable npm "
+     "scripts and unit + Playwright e2e tests with captured evidence."),
+    ("AI edit-assist service",
+     "Deliver the AI edit-assist backend service: an API that takes a video transcript + timeline "
+     "and returns suggested cuts (remove filler words / silences) and a tightened edit list, with a "
+     "clear request/response schema. Ship runnable npm scripts and unit tests with captured "
+     "evidence; stub the model call behind an interface so it runs offline in tests."),
+    ("Editor design system",
+     "Deliver the editor's design system: a professional dark theme, color + spacing + typography "
+     "tokens, and base components (toolbar, panel, timeline track, transport controls) with docs. "
+     "Ship runnable npm scripts and unit tests with captured evidence."),
+    ("Transcript-based editing",
+     "Deliver transcript-based editing: render the video's transcript as editable text where "
+     "deleting a sentence removes the matching timeline range, and edits stay in sync with the "
+     "timeline. Ship runnable npm scripts and unit + Playwright e2e tests with captured evidence."),
+    ("Clipper brand & positioning guide",
+     "Deliver a brand and positioning guide (no code) for 'Cursor for video editors': the "
+     "positioning statement, tone-of-voice principles, naming, and example taglines and marketing "
+     "copy. Produce a well-structured written guide document with concrete examples."),
+    ("Privacy-first editor analytics",
+     "Deliver a privacy-first editor analytics module: a small event-tracking API for editor actions "
+     "(cut/split/export), a localStorage buffer, and a summary view — no third-party network calls. "
+     "Ship runnable npm scripts and unit tests with captured evidence."),
+    ("Export & render pipeline",
+     "Deliver the export/render pipeline: take an edit list + source clips and produce a render plan "
+     "(ffmpeg-style command list) plus a progress model; stub the actual encode behind an interface "
+     "so it runs offline. Ship runnable npm scripts and unit tests with captured evidence."),
+    ("Clipper landing site",
+     "Deliver the marketing landing site: hero pitching 'Cursor for video editors', a feature "
+     "section per capability (timeline, AI cuts, transcript editing, export), responsive layout, and "
+     "strong accessibility. Ship runnable npm scripts and Playwright e2e tests with captured evidence."),
 ]
 
 
@@ -116,6 +125,7 @@ class Operator:
         self._plan_attempts: dict[str, int] = {}
         self._expansion_inflight = False
         self._founded = False  # set once the first real workforce plan is approved
+        self.roadmap: list[tuple[str, str]] = []  # the system's own roadmap (LLM-generated at startup)
 
     # ---- infra ----------------------------------------------------------
     def setup_db(self) -> None:
@@ -380,7 +390,8 @@ class Operator:
                     await asyncio.sleep(15)
                     continue
                 org = await self.org()
-                headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
+                emps = [e for e in org["employees"] if e["status"] != "terminated"]
+                headcount = len(emps)
                 open_reqs = [r for r in org["staffing"] if str(r["status"]).lower() == "open"]
                 bottlenecks = self.bottleneck_professions(org)
                 if headcount >= MAX_HEADCOUNT:
@@ -388,7 +399,21 @@ class Operator:
                     # don't waste formation beats churning against the ceiling.
                     await asyncio.sleep(30)
                     continue
-                if headcount < TARGET_HEADCOUNT or open_reqs or bottlenecks:
+                # PULL-BASED growth (audit A4): hire only on REAL demand, never on a push signal.
+                #  (a) a lead filed an open staffing_request (someone actually asked), or
+                #  (b) initial ramp: still below a minimal viable size AND nobody is idle.
+                # Never hire while ICs already sit idle with no task — that push-growth (target
+                # headcount / bottleneck heuristics) is how the org ballooned to 18 with people who
+                # never did anything. bottlenecks still enrich the directive below, just don't trigger.
+                assigned = {t["assignee_employee_id"] for t in org["tasks"] if t["assignee_employee_id"]}
+                idle_ics = [
+                    e for e in emps
+                    if e["role"] != "ceo" and not e["can_lead"] and e["id"] not in assigned
+                ]
+                want_growth = bool(open_reqs) or (
+                    headcount < MIN_VIABLE_HEADCOUNT and len(idle_ics) < 2
+                )
+                if want_growth:
                     self._expansion_inflight = True
                     bottleneck_line = ""
                     if bottlenecks:
@@ -431,9 +456,57 @@ class Operator:
                 self._expansion_inflight = False
             await asyncio.sleep(30)
 
+    async def generate_roadmap(self, done_titles: list[str]) -> None:
+        """The system decides its OWN roadmap: an LLM decomposes the mission into product goals.
+
+        No hardcoded feature list — the mission goes in, a structured goal list comes out. Falls back
+        to the built-in ROADMAP only if the model call fails, so a run never stalls.
+        """
+        key = os.environ.get("AZURE_OPENAI_API_KEY")
+        base = os.environ.get("AZURE_OPENAI_BASE_URL")
+        dep = os.environ.get("AZURE_OPENAI_DEPLOYMENT")
+        if not (key and base and dep):
+            self.log("no Azure keys in env — using built-in roadmap", "warn")
+            self.roadmap = list(ROADMAP)
+            return
+        done = ""
+        if done_titles:
+            done = "\n\nAlready delivered (build on these, do not repeat):\n- " + "\n- ".join(done_titles)
+        prompt = (
+            f"You are the founding CEO of a startup. Your mission:\n{MISSION}\n\n"
+            "Produce a product roadmap of 10 concrete, independently-deliverable product goals that "
+            "build this product incrementally toward a real, usable v1. Interleave disciplines "
+            "(frontend, AI/backend, design, marketing, analytics) so different specialist leads work "
+            "in parallel. Each goal has a short title and a 2-3 sentence brief that names the concrete "
+            "deliverable and how 'done' is proven (runnable npm scripts + unit/e2e tests + captured "
+            "evidence for code; a structured written document for non-code work). Order them so the "
+            "foundational build comes before what depends on it." + done +
+            '\n\nReturn ONLY JSON: {"goals":[{"title":"...","brief":"..."}]}'
+        )
+        body = {
+            "model": dep,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+        }
+        async with httpx.AsyncClient(timeout=180.0) as c:
+            r = await c.post(
+                f"{base.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+            )
+            r.raise_for_status()
+            content = r.json()["choices"][0]["message"]["content"]
+        goals = json.loads(content).get("goals", [])
+        self.roadmap = [(g["title"], g["brief"]) for g in goals if g.get("title") and g.get("brief")]
+        if not self.roadmap:
+            raise ValueError("model returned an empty roadmap")
+        self.log(f"CEO/LLM decomposed the mission into a {len(self.roadmap)}-goal roadmap:")
+        for i, (t, _) in enumerate(self.roadmap, 1):
+            self.log(f"  {i:>2}. {t}")
+
     def brief_for_title(self, title: str) -> str:
         base = title.split(" (v")[0]
-        for t, b in ROADMAP:
+        for t, b in (self.roadmap or ROADMAP):
             if t == base:
                 return b
         return (f"Deliver '{title}' to a high, tested standard. Ship runnable npm scripts and "
@@ -458,14 +531,15 @@ class Operator:
             self.log(f"rehydrated {len(self.goal_runs)} goals from tracker")
 
     def next_roadmap_item(self) -> tuple[str, str]:
-        title, brief = ROADMAP[self._roadmap_i % len(ROADMAP)]
-        cycled = self._roadmap_i >= len(ROADMAP)
+        rm = self.roadmap or ROADMAP  # the system's own roadmap; built-in only as a fallback
+        title, brief = rm[self._roadmap_i % len(rm)]
+        cycled = self._roadmap_i >= len(rm)
         self._roadmap_i += 1
         if cycled:
             title = f"{title} (v{self._iteration + 1})"
             brief = (f"Iterate on the prior '{title}': add a meaningful improvement (new feature, "
                      "polish, accessibility, or performance) and keep all tests green. " + brief)
-            if self._roadmap_i % len(ROADMAP) == 0:
+            if self._roadmap_i % len(rm) == 0:
                 self._iteration += 1
         return title, brief
 
@@ -485,9 +559,47 @@ class Operator:
             try:
                 org = await self.org()
                 leads = self.leads(org)
+                # AUTHORITATIVE completion first: the engine flips the ledger goal to 'done' when its
+                # delegation-root task lands done (chorus goal roll-up). Trust that over the product-run
+                # status, which can loop or false-pass. asyncpg returns goal ids as UUID objects; the
+                # goal_runs keys are strings, so normalise with str().
+                ledger_goal_status = {str(g["id"]): g["status"] for g in org["goals"]}
+                # A goal whose delegation gave up — root delegation task BLOCKED with an active
+                # 'integrate_iteration_exhausted' recovery — is STRANDED (nothing converged, e.g. a
+                # subjective deliverable the reviewer kept rejecting). Shelve it and move on rather than
+                # letting a stuck goal clog an active-goal slot forever.
+                stranded_rows = await self.q(
+                    "select distinct t.goal_id from task t "
+                    "join recovery_action ra on ra.source_task_id=t.id and ra.company_id=t.company_id "
+                    "where t.company_id=$1 and t.execution_mode='delegation' and t.parent_id is null "
+                    "and t.status='blocked' and ra.status='active' "
+                    "and ra.cause='integrate_iteration_exhausted'",
+                    uuid.UUID(self.co))
+                stranded = {str(r["goal_id"]) for r in stranded_rows if r["goal_id"]}
                 # refresh statuses of in-flight goal runs
                 for gid, info in list(self.goal_runs.items()):
-                    if info.get("run_id") and info["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done"):
+                    if info["status"] in TERMINAL_GOAL_STATUSES:
+                        continue
+                    # (a) ledger goal rolled up to done -> retire it; goal_daemon queues the next
+                    if ledger_goal_status.get(gid) == "done":
+                        info["status"] = "done"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='done',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' COMPLETED (ledger roll-up)")
+                        continue
+                    # (a2) delegation stranded (never converged) -> shelve it, free the slot
+                    if gid in stranded:
+                        info["status"] = "stranded"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='stranded',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' SHELVED (delegation stranded — moving on)", "warn")
+                        continue
+                    # (b) fall back to the delegation product-run terminal status
+                    if info.get("run_id"):
                         st = await self.run_status(info["run_id"])
                         if st and st["status"] in ("succeeded", "failed", "canceled", "timed_out"):
                             info["status"] = st["status"]
@@ -499,7 +611,7 @@ class Operator:
                             self.db.commit()
                             self.log(f"goal '{info['title'][:40]}' finished ({st['status']})")
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in TERMINAL_GOAL_STATUSES]
                 running = [i for i in active if i.get("run_id")]
                 # current load per lead (running goals already assigned to them)
                 load: dict[str, int] = {}
@@ -532,7 +644,7 @@ class Operator:
         while True:
             try:
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in TERMINAL_GOAL_STATUSES]
                 if len(active) < MAX_ACTIVE_GOALS:
                     title, brief = self.next_roadmap_item()
                     existing_titles = {i["title"] for i in self.goal_runs.values()}
@@ -565,7 +677,7 @@ class Operator:
                 running = sum(1 for t in tasks if t["status"] in ("in_progress", "IN_PROGRESS"))
                 goals_done = sum(1 for i in self.goal_runs.values() if i["status"] in ("done", "succeeded"))
                 goals_active = len([i for i in self.goal_runs.values()
-                                    if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")])
+                                    if i["status"] not in TERMINAL_GOAL_STATUSES])
                 assert self.db is not None
                 self.db.execute(
                     "INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -646,6 +758,13 @@ class Operator:
         except Exception:  # noqa: BLE001
             pass
         self.log(f"MISSION: {MISSION[:80]}…")
+        # The system decides its own roadmap from the mission — no hardcoded feature list.
+        if not self.roadmap:
+            try:
+                await self.generate_roadmap([i["title"] for i in self.goal_runs.values()])
+            except Exception as e:  # noqa: BLE001
+                self.log(f"roadmap generation failed ({e}); using built-in fallback", "warn")
+                self.roadmap = list(ROADMAP)
         # kick off formation for the founding org (only for a genuinely fresh company)
         if not self.goal_runs and not self._founded:
             await self.submit_run("formation", MISSION)
