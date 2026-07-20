@@ -12,3 +12,10 @@ uv.lock
 .monitor-runs/
 .podium/
 
+
+# run reports: keep the curated audit + plan, ignore the bulky artifacts (html, screenshots, dumps)
+/reports/*
+!/reports/lumen-run/
+/reports/lumen-run/*
+!/reports/lumen-run/AUDIT.md
+!/reports/lumen-run/PLAN.md
