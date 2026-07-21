@@ -120,15 +120,45 @@ def test_build_wires_token_pricing_into_both_factories(tmp_path: Path, database_
         graph.close()
 
 
-def test_horizon_runs_without_a_reasoner_one_mind(tmp_path: Path, database_url: str) -> None:
-    """One mind, one ledger: horizon is the deterministic LEDGER, not a second mind. The CEO (an
-    employee) is the only thing that reasons direction (it authors the roadmap via roadmap_propose),
-    so build() wires horizon with NO reasoner — its LLM decomposer/scout/analyst stay inert and no
-    non-employee prompt runs. The deterministic OutcomeListener feedback loop is not reasoner-gated."""
+def test_horizon_gets_a_live_reasoner(tmp_path: Path, database_url: str) -> None:
+    """Activation 2026-07-18: the direction engine ran with reasoner=None since CP-1 —
+    ~1.2k lines of generation/planning inert. build() now wires the same chat substrate
+    the beats use, so decompose/generate no longer raise 'built without a reasoner'."""
+    graph = build(_config(tmp_path, database_url))
+    scout = getattr(graph.horizon, "_scout", None)
+    assert scout is not None  # generation lights up only when a reasoner is present
+
+
+def test_seed_horizon_direction_gives_a_live_decision_goal_and_report(
+    tmp_path: Path, database_url: str
+) -> None:
+    """F2: podium now drives horizon. Seeding the founder objective's root goal gives horizon a live
+    decision + adopted goal (chorus stays the source of truth — no duplicate goal), so its outcome
+    listener has a record to fold into and its direction report populates (both were empty before)."""
+    from podium.conductor._chorus_executor import _ensure_root_goal, _seed_horizon_direction
+
     graph = build(_config(tmp_path, database_url))
     try:
-        assert getattr(graph.horizon, "_scout", "sentinel") is None
-        assert getattr(graph.horizon, "_analyst", "sentinel") is None
-        assert getattr(graph.horizon, "_decomposer", "sentinel") is None
+        objective = "Build an AI note-taker for professionals. It must sync across devices."
+        root_goal_id = _ensure_root_goal(graph.org._ledger, objective)
+        assert root_goal_id is not None
+
+        # The F2 gap: before podium drives it, horizon is inert — no decisions, blank report.
+        assert graph.horizon.state() == []
+
+        _seed_horizon_direction(graph, root_goal_id=root_goal_id, objective=objective)
+
+        state = graph.horizon.state()
+        assert len(state) == 1
+        assert [g.id for g in state[0].goals] == [root_goal_id]
+        assert state[0].decision.statement == "Build an AI note-taker for professionals."
+        assert "Build an AI note-taker for professionals." in graph.horizon.report()
+        # No duplication — chorus still holds exactly the one root goal it authored.
+        assert len(graph.org._ledger.goals.children(None)) == 1
+
+        # Idempotent across runs — a second call mints neither a duplicate decision nor goal edge.
+        _seed_horizon_direction(graph, root_goal_id=root_goal_id, objective=objective)
+        assert len(graph.horizon.state()) == 1
+        assert [g.id for g in graph.horizon.state()[0].goals] == [root_goal_id]
     finally:
         graph.close()

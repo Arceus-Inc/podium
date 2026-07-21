@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 from chorus.ledger._models import TaskStatus
+from horizon.model import Decision
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.companies import mark_company_idle
@@ -158,6 +159,30 @@ class CompanyGraphHost:
         except Exception:  # a report that can't be written must never fail a run
             logger.warning("direction_report_write_failed", company_id=str(company_id))
 
+    async def propose_next_direction(self, runtime: _CompanyRuntime) -> None:
+        """Drive horizon's HUMAN-GATED generation funnel over the org's own outcome stream (F2).
+
+        After a delivery run ends, horizon reflects on the landed outcomes — its ``InternalSource``
+        reads the very same chorus ``OutcomeFeed`` the listener folds — scouts + analyses them, and may
+        PROPOSE the next decision. Proposals are human-gated: they land in horizon's ``ProposalStore``
+        and surface via the cockpit's direction door (``list_proposals`` / governance ``read_direction``);
+        nothing reaches the live tree until an operator approves, exactly like the CEO workforce plan.
+
+        Runs off the event loop (the reasoner call is blocking, the heartbeat shares this loop) and is
+        best-effort — a proposal that can't be produced must never fail the run. Cheap when nothing is
+        new: the evidence bus dedups, so a survey with no fresh outcomes makes no LLM call.
+        """
+        import asyncio
+
+        from horizon.generation import InternalSource
+
+        horizon = runtime.graph.horizon
+        try:
+            source = InternalSource(horizon._outcomes)
+            await asyncio.to_thread(horizon.generate, [source])
+        except Exception:  # proposing the next direction must never fail a run
+            logger.warning("horizon_generate_failed")
+
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
             if runtime.horizon_stop is not None:
@@ -252,6 +277,35 @@ def _ensure_root_goal(ledger: Any, directive: str) -> str | None:
     return str(created.id)
 
 
+def _seed_horizon_direction(graph: CompanyGraph, *, root_goal_id: str, objective: str) -> None:
+    """Mirror the company's root chorus goal into horizon as a live Decision + adopted Goal (F2).
+
+    Without this, horizon's stores stay empty: its OutcomeListener has no strategy record to fold
+    delivery verdicts into, its StrategyStore has no goals, and ``horizon.report()`` renders blank —
+    the "what's next" brain is assembled but never driven. We do NOT duplicate the goal: chorus stays
+    the source of truth for the skeleton; horizon *adopts* the existing goal id (keeping only its own
+    strategy mirror) and records the horizon-native decision -> goal edge. The decision id is derived
+    from the goal id so a later run re-seeds the SAME decision instead of minting a duplicate.
+    Idempotent — safe to call on every run.
+    """
+    import re
+
+    horizon = graph.horizon
+    decision_id = f"dec-{root_goal_id}"
+    if not any(state.decision.id == decision_id for state in horizon.state()):
+        first_sentence = re.split(r"(?<=[.!?])\s", objective.strip(), maxsplit=1)[0]
+        statement = (first_sentence or objective).strip()[:200]
+        horizon.seed_decision(
+            Decision(
+                id=decision_id,
+                statement=statement or "Founder objective",
+                status="active",
+                rationale="Founder objective — the company's root goal (chorus-owned).",
+            )
+        )
+    horizon.adopt_goal(root_goal_id, decision_id=decision_id)
+
+
 def _root_resolver(graph: CompanyGraph) -> Any:
     """Map any chorus task id to its root (the run's engine_task_id) by walking parents in the ledger."""
     ledger = graph.org._ledger
@@ -313,6 +367,17 @@ class ChorusRunExecutor:
                 ),
             )
             task_id = task.id
+            # F2: mirror the company's root goal into horizon so its loop has a live decision+goal
+            # to fold outcomes into and its direction report populates. Idempotent + best-effort;
+            # a reclaim (above) already ran on a graph whose horizon stores persist on disk.
+            root_goal_id = _root_goal_id(runtime.graph.org._ledger)
+            if root_goal_id is not None:
+                try:
+                    _seed_horizon_direction(
+                        runtime.graph, root_goal_id=root_goal_id, objective=directive
+                    )
+                except Exception:  # seeding direction must never fail a run
+                    logger.warning("horizon_seed_failed", company_id=str(company_id))
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
@@ -331,5 +396,9 @@ class ChorusRunExecutor:
             # per-task cancel today (only whole-heartbeat stop, which would kill sibling runs).
             return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
         finally:
+            # A delivery outcome landed — let horizon reflect on it and (human-gated) propose what's
+            # next. Formation runs serve no delivery goal, so they don't feed the direction funnel.
+            if (params or {}).get("execution_mode") != "formation":
+                await self._host.propose_next_direction(runtime)
             # However the run ends, the loop's story lands where the cockpit door reads it.
             self._host.write_direction_report(runtime, company_id)

@@ -417,6 +417,9 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
         def write_direction_report(self, rt: object, company_id: object) -> None:
             pass  # the real host lands horizon's report; irrelevant to the reclaim contract
 
+        async def propose_next_direction(self, rt: object) -> None:
+            pass  # the real host drives horizon's proposal funnel; irrelevant to the reclaim contract
+
     executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
 
     async def never_canceled() -> bool:
