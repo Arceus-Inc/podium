@@ -111,7 +111,13 @@ class FullRun(Operator):
             return []
         out: list[dict] = []
         for rec in records.values():
-            if not rec.get("decision_id") or not rec.get("title"):
+            decision_id = rec.get("decision_id") or ""
+            if not decision_id or not rec.get("title"):
+                continue
+            # Only the CEO's ROADMAP goals (roadmap_propose mints ``dec_<hex>`` decision ids). Skip
+            # podium's F2 root-objective seed (``dec-<uuid>``): it mirrors the whole raw mission as one
+            # coarse goal to activate horizon's outcome listener — it is NOT the CEO's decomposition.
+            if not decision_id.startswith("dec_"):
                 continue
             out.append(
                 {
