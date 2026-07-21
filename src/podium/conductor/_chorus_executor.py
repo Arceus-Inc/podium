@@ -155,7 +155,7 @@ class CompanyGraphHost:
             path = self._workdir / str(company_id) / "direction-report.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(runtime.graph.horizon.report(), encoding="utf-8")
-        except Exception:  # noqa: BLE001 -- a report that can't be written must never fail a run
+        except Exception:  # a report that can't be written must never fail a run
             logger.warning("direction_report_write_failed", company_id=str(company_id))
 
     async def aclose(self) -> None:
@@ -167,37 +167,17 @@ class CompanyGraphHost:
             runtime.graph.close()  # the company's live Postgres connection
 
 
-_FORMATION_CONTRACT = (
-    "This is a FORMATION directive: form the permanent organization for the objective below — "
-    "do NOT build the product yourself and do NOT write code. Process guidance (not acceptance "
-    "criteria): consult workforce_catalog_read for the valid professions, then submit one "
-    "complete typed workforce plan via workforce_plan_propose. THEN author the company's ROADMAP: "
-    "read the reality digest with governance_read (note what is already done, blocked, and the "
-    "capacity by profession), follow the how-to-plan-a-roadmap skill, and propose the roadmap the "
-    "workforce will build via roadmap_propose — the few outcome-shaped goals that discharge the "
-    "objective, each with a measurable metric and target, sized to the workforce you just proposed.\n\n"
-    "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
-    "contains one proposed plan in which every hire names a catalog profession, a reporting "
-    "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
-        "parser module' — leads later use these to pick assignees); the org is NOT flat — when the "
-        "objective needs more than one specialist, at least one hire holds a bounded management "
-        "grant (can_lead=true, max_delegation_depth >= 1, max_team_size covering itself plus its "
-        "reports) and the other hires report to that lead rather than to the CEO; every budget "
-        "allocation is bounded; "
-    "`governance-ledger.md` records the workforce proposal line; AND you have proposed a ROADMAP — "
-    "a `PROPOSED roadmap` line in `governance-ledger.md` and a proposed decision whose goals each "
-    "name a measurable metric and target, sized to the proposed workforce. Tool-call ordering is NOT "
-    "observable and is never an acceptance criterion. The plan and roadmap stay pending for a human "
-    "decision; never claim anyone was hired. Then stop.\n\n## Objective\n"
-)
-
-
 def _effective_directive(params: dict[str, Any], directive: str) -> str:
-    """Formation runs carry the engine's formation contract server-side (live 2026-07-18: a
-    raw founder objective sent as-is made the CEO build the whole product personally instead
-    of proposing an org — the product owns the incantation, not the founder)."""
+    """Formation runs are reframed as org-building tasks (live 2026-07-18: a raw founder objective
+    sent as-is made the CEO build the whole product personally instead of proposing an org).
+
+    The framing is a PROMPT and prompts are an employee concern, so the words live in the CEO
+    employee (``chorus_employee.ceo.formation_directive``); the conductor only decides WHEN a run is
+    a formation run and asks the employee for the incantation — no prompt text lives here."""
     if params.get("execution_mode") == "formation":
-        return _FORMATION_CONTRACT + directive
+        from chorus_employee.ceo import formation_directive
+
+        return formation_directive(directive)
     return directive
 
 

@@ -120,10 +120,15 @@ def test_build_wires_token_pricing_into_both_factories(tmp_path: Path, database_
         graph.close()
 
 
-def test_horizon_gets_a_live_reasoner(tmp_path: Path, database_url: str) -> None:
-    """Activation 2026-07-18: the direction engine ran with reasoner=None since CP-1 —
-    ~1.2k lines of generation/planning inert. build() now wires the same chat substrate
-    the beats use, so decompose/generate no longer raise 'built without a reasoner'."""
+def test_horizon_runs_without_a_reasoner_one_mind(tmp_path: Path, database_url: str) -> None:
+    """One mind, one ledger: horizon is the deterministic LEDGER, not a second mind. The CEO (an
+    employee) is the only thing that reasons direction (it authors the roadmap via roadmap_propose),
+    so build() wires horizon with NO reasoner — its LLM decomposer/scout/analyst stay inert and no
+    non-employee prompt runs. The deterministic OutcomeListener feedback loop is not reasoner-gated."""
     graph = build(_config(tmp_path, database_url))
-    scout = getattr(graph.horizon, "_scout", None)
-    assert scout is not None  # generation lights up only when a reasoner is present
+    try:
+        assert getattr(graph.horizon, "_scout", "sentinel") is None
+        assert getattr(graph.horizon, "_analyst", "sentinel") is None
+        assert getattr(graph.horizon, "_decomposer", "sentinel") is None
+    finally:
+        graph.close()
