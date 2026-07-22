@@ -38,11 +38,11 @@ STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
 MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
-# Smallest cross-functional pod the CEO can add (one lead + designer + frontend + analyst).
-# Held-goal growth only fires if a whole pod still fits under MAX_HEADCOUNT — otherwise the CEO
-# keeps proposing a pod that overflows the cap and every formation beat is wasted on a plan the
-# approval daemon will skip.
-MIN_POD_SIZE = int(os.environ.get("OPERATOR_MIN_POD_SIZE", "4"))
+# Hard safety cap on how many expansion (formation) beats the growth daemon may EVER fire. Growth
+# is pull-based, so this is only a backstop against a pathological loop (e.g. a lead re-filing a
+# staffing request the approval cap keeps skipping): each formation beat is an expensive CEO sprint
+# that often fails the review gate, so we never let them run away and burn money for nothing.
+MAX_EXPANSIONS = int(os.environ.get("OPERATOR_MAX_EXPANSIONS", "8"))
 # Below this, ramp up to form a couple of viable pods; at/above it, only hire on REAL demand
 # (an open staffing request from a lead). Growth is PULL, not push.
 MIN_VIABLE_HEADCOUNT = int(os.environ.get("OPERATOR_MIN_VIABLE_HEADCOUNT", "8"))
@@ -126,6 +126,7 @@ class Operator:
         self._approved_plans: set[str] = set()
         self._plan_attempts: dict[str, int] = {}
         self._expansion_inflight = False
+        self._expansions = 0  # total expansion (formation) beats fired — capped by MAX_EXPANSIONS
         self._founded = False  # set once the first real workforce plan is approved
 
     # ---- infra ----------------------------------------------------------
@@ -425,30 +426,22 @@ class Operator:
                     e for e in emps
                     if e["role"] != "ceo" and not e["can_lead"] and e["id"] not in assigned
                 ]
-                # A queued goal with NO free capable pod to take it is REAL demand for another pod:
-                # the delegation daemon holds concurrent goals one-per-lead, so a held goal with every
-                # lead busy is the pull signal to hire the next cross-functional pod — this is what
-                # turns 3 concurrent goals into 3 concurrent pods instead of a queue behind one lead.
-                active_leads = {
-                    i["lead"] for i in self.goal_runs.values()
-                    if i.get("lead") and i["status"] not in
-                    ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
-                }
-                free_leads = [ld for ld in self.leads(org) if ld["id"] not in active_leads]
-                held_goals = [
-                    i for i in self.goal_runs.values()
-                    if i.get("run_id") is None
-                    and i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
-                ]
-                # A held goal is only a reason to HIRE if a whole new pod still fits under the cap.
-                # Otherwise the held goal must wait for a busy lead to free up (the delegation daemon
-                # re-delegates it the moment a lead finishes) — firing a formation run here just burns
-                # CEO beats on a pod the approval daemon will skip for exceeding MAX_HEADCOUNT.
-                pod_fits = headcount + MIN_POD_SIZE <= MAX_HEADCOUNT
-                want_growth = bool(open_reqs) or bool(held_goals and not free_leads and pod_fits) or (
+                # Growth is PULL, not push: the ONLY reasons to fire an expensive, often-rejected
+                # formation beat are (a) a lead actually filed an open staffing_request, or (b) the
+                # initial ramp to a minimally-viable org. A backlog of goals waiting behind busy
+                # leads is NOT a hire signal — that is the normal state of any company, and the
+                # delegation daemon already re-delegates a queued goal the instant a lead frees up.
+                #
+                # Treating a held goal as growth demand was the ROOT CAUSE of the failed beats:
+                # goals queued behind the (correctly bounded) leads kept the signal true, so every
+                # ~3 minutes the CEO re-authored the entire roadmap (29 goals for ~10 real outcomes)
+                # and each formation beat failed the approval/review gate — 16 of 21 wasted beats
+                # and two-thirds of spend in the audited run. Parallelism comes from delegating one
+                # goal per lead the INITIAL formation created, not from perpetual re-hiring.
+                want_growth = bool(open_reqs) or (
                     headcount < MIN_VIABLE_HEADCOUNT and len(idle_ics) < 2
                 )
-                if not want_growth:
+                if not want_growth or self._expansions >= MAX_EXPANSIONS:
                     await asyncio.sleep(30)
                     continue
                 if True:
@@ -483,6 +476,7 @@ class Operator:
                         + bottleneck_line
                     )
                     await self.submit_run("formation", directive)
+                    self._expansions += 1
                     # wait (up to ~150s) for the approval daemon to clear the flag, else clear it
                     for _ in range(30):
                         if not self._expansion_inflight:
