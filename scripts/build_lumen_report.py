@@ -265,6 +265,37 @@ def _inline(s: str) -> str:
     return s
 
 
+# ---- direction decisions (horizon DecisionStore) ----------------------------
+
+def _load_direction_decisions(company_id: str, emps: list[dict]) -> list[dict]:
+    """The CEO's formal decisions live in horizon's DecisionStore (``decisions.json`` in the
+    company workdir), not the task-level ``decision_record`` ledger table. Load them so the report
+    reflects the decision the CEO actually recorded (statement + rationale + owner + status)."""
+    path = WORKDIR / company_id / "decisions.json"
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return []
+    by_id = {e["id"]: e.get("name") for e in emps}
+    out: list[dict] = []
+    for dec in raw.values() if isinstance(raw, dict) else []:
+        if not isinstance(dec, dict):
+            continue
+        owner = dec.get("owner")
+        out.append({
+            "id": dec.get("id"),
+            "option": dec.get("statement") or "decision",
+            "rationale": dec.get("rationale") or "",
+            "status": dec.get("status") or "",
+            "goal_ids": dec.get("goal_ids") or [],
+            "by_name": by_id.get(owner, owner) if owner else "founder objective",
+            "source": "direction",
+        })
+    return out
+
+
 # ---- DB ---------------------------------------------------------------------
 
 async def fetch(company_id: str) -> dict:
@@ -327,10 +358,15 @@ async def fetch(company_id: str) -> dict:
         total_cost = await conn.fetchval(
             "select coalesce(sum(cost_cents),0) from cost_event where company_id=$1",
             _u(company_id))
+        # The CEO's formal decisions are recorded in horizon's DecisionStore (decisions.json),
+        # not the task-level decision_record ledger table — merge them so "CEO records decisions"
+        # reflects the decision the CEO actually made, with its rationale.
+        direction_decisions = _load_direction_decisions(company_id, emps)
         return {
             "company": dict(company) if company else {},
             "employees": emps, "goals": goals, "tasks": tasks, "beats": beats,
-            "artifacts": arts, "decisions": decisions, "plans": plans,
+            "artifacts": arts, "decisions": direction_decisions + list(decisions),
+            "task_decisions": decisions, "plans": plans,
             "plan_emps": plan_emps, "plan_grants": plan_grants,
             "approvals": approvals, "teams": teams, "staffing": staffing,
             "cost_by_emp": {str(r["employee_id"]): r for r in cost_by_emp},
@@ -544,11 +580,25 @@ def compute_health(data: dict) -> list[dict]:
     })
 
     # C2 CEO decision record
+    _decs = data.get("decisions") or []
+    _ceo_decs = [d for d in _decs if d.get("source") == "direction" and d.get("by_name") != "founder objective"]
+    _with_rationale = [d for d in _ceo_decs if (d.get("rationale") or "").strip()]
+    if _ceo_decs:
+        _detail = (f"{len(_ceo_decs)} CEO decision(s) recorded, "
+                   f"{len(_with_rationale)} with a rationale"
+                   + (f" (e.g. \u201c{(_with_rationale[0]['rationale'] or '')[:90]}\u2026\u201d)"
+                      if _with_rationale else " \u2014 rationale still empty"))
+        _level = "ok" if _with_rationale else "warn"
+    elif _decs:
+        _detail = f"{len(_decs)} decision record(s)"
+        _level = "ok"
+    else:
+        _detail = "no formal decision recorded (formation beats failing?)"
+        _level = "warn"
     findings.append({
-        "level": "warn" if not data.get("decisions") else "ok",
+        "level": _level,
         "label": "CEO records decisions",
-        "detail": (f"{len(data.get('decisions') or [])} decision record(s)"
-                   if data.get("decisions") else "no formal decision recorded (formation beats failing?)"),
+        "detail": _detail,
     })
 
     return findings
@@ -771,15 +821,25 @@ def render(data: dict, deliverables: list[dict], shots: list[dict], git: dict | 
     if data["decisions"]:
         for d in data["decisions"]:
             A('<div class="card">')
-            A(f'<div class="node"><span class="t">{esc(d.get("option") or "decision")}</span>'
-              f'<span class="pill info">conf {esc(d.get("confidence"))}</span>'
-              f'<span class="outcome" style="margin-left:auto">{esc(d.get("by_name"))}</span></div>')
-            if d.get("rationale"):
-                A(f'<p class="who" style="margin:8px 0 0">{esc(d["rationale"])[:800]}</p>')
-            if d.get("outcome_metric"):
-                A(f'<p class="outcome" style="margin:6px 0 0">metric: {esc(d["outcome_metric"])}</p>')
-            if d.get("rejected_alternatives"):
-                A(f'<p class="outcome">rejected: {esc(d["rejected_alternatives"])[:300]}</p>')
+            if d.get("source") == "direction":
+                st = esc(d.get("status") or "")
+                A(f'<div class="node"><span class="t">{esc(d.get("option") or "decision")}</span>'
+                  + (f'<span class="pill info">{st}</span>' if st else "")
+                  + f'<span class="outcome" style="margin-left:auto">{esc(d.get("by_name"))}</span></div>')
+                if d.get("rationale"):
+                    A(f'<p class="who" style="margin:8px 0 0">{esc(d["rationale"])[:800]}</p>')
+                if d.get("goal_ids"):
+                    A(f'<p class="outcome" style="margin:6px 0 0">drives {len(d["goal_ids"])} goal(s)</p>')
+            else:
+                A(f'<div class="node"><span class="t">{esc(d.get("option") or "decision")}</span>'
+                  f'<span class="pill info">conf {esc(d.get("confidence"))}</span>'
+                  f'<span class="outcome" style="margin-left:auto">{esc(d.get("by_name"))}</span></div>')
+                if d.get("rationale"):
+                    A(f'<p class="who" style="margin:8px 0 0">{esc(d["rationale"])[:800]}</p>')
+                if d.get("outcome_metric"):
+                    A(f'<p class="outcome" style="margin:6px 0 0">metric: {esc(d["outcome_metric"])}</p>')
+                if d.get("rejected_alternatives"):
+                    A(f'<p class="outcome">rejected: {esc(d["rejected_alternatives"])[:300]}</p>')
             A('</div>')
     else:
         A('<div class="card"><span class="muted">No structured decision records; the CEO'
