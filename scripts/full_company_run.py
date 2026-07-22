@@ -43,12 +43,13 @@ from pathlib import Path
 # --- the single line of input -------------------------------------------------------------------
 MISSION = "create a markdown editor for calm users"
 
-# --- tune the executor for ONE small product BEFORE importing the operator (module reads env at
-#     import time). A markdown editor is a small suite, so keep the org lean and let pull-based
-#     growth add people only if a lead actually asks. ------------------------------------------------
-os.environ.setdefault("OPERATOR_TARGET_HEADCOUNT", "6")
-os.environ.setdefault("OPERATOR_MIN_VIABLE_HEADCOUNT", "4")
-os.environ.setdefault("OPERATOR_MAX_HEADCOUNT", "9")
+# --- tune the executor for a company that ships its GOALS IN PARALLEL. The CEO reasons ~3 goals from
+#     the mission, so the org must be able to form ~3 cross-functional pods (a lead + a discipline mix
+#     of ICs) that each own a goal at once. Head targets are sized for that: the delegation daemon fans
+#     one goal per pod and growth pulls in a new pod for any held goal, up to the cap. -----------------
+os.environ.setdefault("OPERATOR_TARGET_HEADCOUNT", "12")
+os.environ.setdefault("OPERATOR_MIN_VIABLE_HEADCOUNT", "7")
+os.environ.setdefault("OPERATOR_MAX_HEADCOUNT", "15")
 os.environ.setdefault("OPERATOR_MAX_ACTIVE_GOALS", "3")
 
 _ROOT = Path(__file__).resolve().parent.parent

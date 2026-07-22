@@ -38,6 +38,11 @@ STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
 MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
+# Smallest cross-functional pod the CEO can add (one lead + designer + frontend + analyst).
+# Held-goal growth only fires if a whole pod still fits under MAX_HEADCOUNT — otherwise the CEO
+# keeps proposing a pod that overflows the cap and every formation beat is wasted on a plan the
+# approval daemon will skip.
+MIN_POD_SIZE = int(os.environ.get("OPERATOR_MIN_POD_SIZE", "4"))
 # Below this, ramp up to form a couple of viable pods; at/above it, only hire on REAL demand
 # (an open staffing request from a lead). Growth is PULL, not push.
 MIN_VIABLE_HEADCOUNT = int(os.environ.get("OPERATOR_MIN_VIABLE_HEADCOUNT", "8"))
@@ -302,18 +307,27 @@ class Operator:
         return ranked
 
     def pick_lead_for_goal(self, org: dict[str, Any], leads: list[dict[str, Any]],
-                           title: str, brief: str, load: dict[str, int]) -> dict[str, Any] | None:
-        """Route a goal to a capable lead, spreading work so teams run in parallel.
+                           title: str, brief: str, load: dict[str, int], *,
+                           exclude: set[str] | None = None,
+                           allow_busy: bool = True) -> dict[str, Any] | None:
+        """Route a goal to a capable lead, fanning goals across DISTINCT pods for parallelism.
 
-        Preference order per lead: (1) does the team FULLY cover the goal's needs — a lead whose
-        team has every required profession can execute the goal end-to-end; (2) is it *eligible* at
-        all (covers >=1 need — otherwise its beats fail); (3) LEAST-LOADED first so concurrent goals
-        fan out to different teams rather than piling onto one; (4) coverage as the final tie-break.
-        Preferring full coverage keeps capability correct, while the load term still spreads work
-        whenever several leads are equally capable — "a few on one goal, others on others".
+        A pod lead runs ONE mission (goal) at a time: concurrent goals should fan out to different
+        pod leads so several cross-functional pods ship in parallel, instead of piling every goal
+        onto whoever was hired first (the failure that left later pods idle and one IC doing all the
+        work). ``exclude`` is the set of leads already running a goal this cycle; a FREE capable lead
+        is always preferred over a busy one. When every capable lead is busy and ``allow_busy`` is
+        False, return ``None`` to HOLD the goal — growth then hires another pod to cover it (real
+        pull). Only when the org can no longer grow (at the headcount cap) do we place a second goal
+        on an already-busy lead.
+
+        Preference order per lead: (1) FREE (not already running a goal); (2) team FULLY covers the
+        goal's needs; (3) *eligible* at all (covers >=1 need — else its beats fail); (4) least-loaded;
+        (5) coverage; (6) team size.
         """
         if not leads:
             return None
+        exclude = exclude or set()
         needs = self.goal_needs(title, brief)
         scored = []
         for ld in leads:
@@ -321,13 +335,19 @@ class Operator:
             coverage = len(needs & roles)
             full = 1 if needs and coverage == len(needs) else 0
             eligible = 1 if coverage >= 1 else 0
-            scored.append((full, eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
-        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3], s[4]), reverse=True)
+            free = 0 if ld["id"] in exclude else 1
+            scored.append((free, full, eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
+        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3], s[4], s[5]), reverse=True)
         best = scored[0]
-        # If nobody can cover ANY need, don't hand it to an incapable lead — wait for a better fit.
-        if best[1] == 0:
+        # Nobody can cover ANY need — don't hand it to an incapable lead; wait for a better-fitting
+        # pod (growth may add one).
+        if best[2] == 0:
             return None
-        return best[5]
+        # The only capable leads are already busy: hold the goal for a fresh pod so goals run in
+        # parallel — unless the org is at its growth ceiling, in which case a busy lead takes it.
+        if best[0] == 0 and not allow_busy:
+            return None
+        return best[6]
 
     # ---- daemons --------------------------------------------------------
     async def approvals_daemon(self) -> None:
@@ -405,7 +425,27 @@ class Operator:
                     e for e in emps
                     if e["role"] != "ceo" and not e["can_lead"] and e["id"] not in assigned
                 ]
-                want_growth = bool(open_reqs) or (
+                # A queued goal with NO free capable pod to take it is REAL demand for another pod:
+                # the delegation daemon holds concurrent goals one-per-lead, so a held goal with every
+                # lead busy is the pull signal to hire the next cross-functional pod — this is what
+                # turns 3 concurrent goals into 3 concurrent pods instead of a queue behind one lead.
+                active_leads = {
+                    i["lead"] for i in self.goal_runs.values()
+                    if i.get("lead") and i["status"] not in
+                    ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
+                }
+                free_leads = [ld for ld in self.leads(org) if ld["id"] not in active_leads]
+                held_goals = [
+                    i for i in self.goal_runs.values()
+                    if i.get("run_id") is None
+                    and i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
+                ]
+                # A held goal is only a reason to HIRE if a whole new pod still fits under the cap.
+                # Otherwise the held goal must wait for a busy lead to free up (the delegation daemon
+                # re-delegates it the moment a lead finishes) — firing a formation run here just burns
+                # CEO beats on a pod the approval daemon will skip for exceeding MAX_HEADCOUNT.
+                pod_fits = headcount + MIN_POD_SIZE <= MAX_HEADCOUNT
+                want_growth = bool(open_reqs) or bool(held_goals and not free_leads and pod_fits) or (
                     headcount < MIN_VIABLE_HEADCOUNT and len(idle_ics) < 2
                 )
                 if not want_growth:
@@ -569,13 +609,19 @@ class Operator:
                 for i in running:
                     if i.get("lead"):
                         load[i["lead"]] = load.get(i["lead"], 0) + 1
-                # launch delegation runs for goals that have none yet, routed by capability
+                # launch delegation runs for goals that have none yet, routed by capability and
+                # FANNED across distinct pods (one active goal per lead) so pods ship in parallel.
                 if leads:
+                    headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
+                    at_cap = headcount >= MAX_HEADCOUNT
+                    busy_leads = {i["lead"] for i in running if i.get("lead")}
                     for gid, info in self.goal_runs.items():
                         if info.get("run_id") is None and len(running) < MAX_ACTIVE_GOALS:
-                            lead = self.pick_lead_for_goal(org, leads, info["title"], info["brief"], load)
+                            lead = self.pick_lead_for_goal(
+                                org, leads, info["title"], info["brief"], load,
+                                exclude=busy_leads, allow_busy=at_cap)
                             if lead is None:
-                                continue  # no capable lead free right now; retry next cycle
+                                continue  # no FREE capable pod right now — hold; growth adds one
                             rid = await self.submit_run("delegation", info["brief"], goal_id=gid,
                                                         lead=lead["id"], max_team_size=int(lead["team"]) or 4)
                             if rid:
@@ -583,6 +629,7 @@ class Operator:
                                 info["lead"] = lead["id"]
                                 info["status"] = "running"
                                 running.append(info)
+                                busy_leads.add(lead["id"])
                                 load[lead["id"]] = load.get(lead["id"], 0) + 1
                                 self.log(f"delegated '{info['title'][:34]}' -> {lead['name']}")
             except Exception as e:  # noqa: BLE001
