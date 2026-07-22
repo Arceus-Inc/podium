@@ -41,16 +41,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 # --- the single line of input -------------------------------------------------------------------
-MISSION = "create a markdown editor for calm users"
+MISSION = "build a cursor type product for video editors"
 
-# --- tune the executor for a company that ships its GOALS IN PARALLEL. The CEO reasons ~3 goals from
-#     the mission, so the org must be able to form ~3 cross-functional pods (a lead + a discipline mix
-#     of ICs) that each own a goal at once. Head targets are sized for that: the delegation daemon fans
-#     one goal per pod and growth pulls in a new pod for any held goal, up to the cap. -----------------
-os.environ.setdefault("OPERATOR_TARGET_HEADCOUNT", "12")
-os.environ.setdefault("OPERATOR_MIN_VIABLE_HEADCOUNT", "7")
-os.environ.setdefault("OPERATOR_MAX_HEADCOUNT", "15")
-os.environ.setdefault("OPERATOR_MAX_ACTIVE_GOALS", "3")
+# --- tune the executor for a company that ships its GOALS IN PARALLEL. The CEO reasons the roadmap
+#     and the workforce from the mission ALONE (no hardcoded roadmap or pod recipe), so size the org
+#     generously enough that it can form several cross-functional pods (a lead + whatever mix of
+#     disciplines each goal needs) and run them at once, but let PULL-based growth decide the real
+#     shape. Head targets are guardrails, not a plan. ----------------------------------------------
+os.environ.setdefault("OPERATOR_TARGET_HEADCOUNT", "16")
+os.environ.setdefault("OPERATOR_MIN_VIABLE_HEADCOUNT", "8")
+os.environ.setdefault("OPERATOR_MAX_HEADCOUNT", "24")
+os.environ.setdefault("OPERATOR_MAX_ACTIVE_GOALS", "4")
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "scripts"))
@@ -70,9 +71,9 @@ co_mod.MISSION = MISSION
 WORKDIR = Path(
     os.environ.get("PODIUM_WORKDIR", str(_ROOT / ".podium" / "workdir"))
 )
-REPORT_DIR = _ROOT / "reports" / "calm-markdown-run"
-DEADLINE_S = int(os.environ.get("FULL_RUN_DEADLINE_S", str(90 * 60)))  # 90 min safety cap
-MAX_DELEGATED_GOALS = int(os.environ.get("FULL_RUN_MAX_GOALS", "5"))
+REPORT_DIR = _ROOT / "reports" / "video-editor-run"
+DEADLINE_S = int(os.environ.get("FULL_RUN_DEADLINE_S", str(120 * 60)))  # 120 min safety cap
+MAX_DELEGATED_GOALS = int(os.environ.get("FULL_RUN_MAX_GOALS", "6"))
 
 
 def _now_hhmmss() -> str:

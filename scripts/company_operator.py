@@ -244,29 +244,42 @@ class Operator:
 
     @staticmethod
     def goal_needs(title: str, brief: str) -> set[str]:
-        """Best-effort professions a goal needs, inferred from its title/brief keywords.
+        """Best-effort IC professions a goal needs, inferred from its title/brief keywords.
 
         A lead can only decompose work onto its own direct reports, so a goal must be routed to a
-        lead whose team actually contains these professions — otherwise the lead's beats fail.
+        lead whose team actually contains these professions — otherwise the lead's beats fail. The
+        keyword sets are deliberately DOMAIN-GENERAL (not tied to any one product) so this routes
+        sensibly for anything from a markdown editor to a video editor to a data pipeline.
         """
         t = f"{title} {brief}".lower()
         needs: set[str] = set()
         if any(k in t for k in (
-            "app", "web app", "ui", "npm", "e2e", "playwright", "editor", "timer", "tracker",
-            "component", "package", "module", "localstorage", "frontend", "site", "page",
-            "render", "keyboard", "notification", "grid", "dialog",
+            "app", "web", "ui", "ux", "npm", "e2e", "playwright", "editor", "timer", "tracker",
+            "component", "package", "module", "localstorage", "frontend", "client", "site", "page",
+            "render", "canvas", "webgl", "timeline", "playback", "preview", "panel", "keyboard",
+            "shortcut", "notification", "grid", "dialog", "interaction", "gesture", "drag", "scrub",
         )):
             needs.add("frontend_engineer")
-        if any(k in t for k in ("storage", "sync", "backend", "api", "persistence", "server", "buffer")):
+        if any(k in t for k in (
+            "storage", "sync", "backend", "api", "persistence", "server", "buffer", "database",
+            "pipeline", "encode", "decode", "codec", "transcode", "stream", "gpu", "compute",
+            "model", "inference", "ml", "ai", "export", "import", "file", "format", "performance",
+            "latency", "memory", "worker", "queue", "cache", "infrastructure", "scaling", "realtime",
+        )):
             needs.add("backend_engineer")
         if any(k in t for k in (
             "design system", "design", "brand", "theme", "typography", "tokens", "spacing",
-            "accessible", "accessibility", "ux", "wireframe", "visual",
+            "accessible", "accessibility", "wireframe", "visual", "layout", "icon", "motion",
         )):
             needs.add("designer")
-        if any(k in t for k in ("market", "landing", "launch", "content", "seo", "copy", "growth", "campaign")):
+        if any(k in t for k in (
+            "market", "landing", "launch", "content", "seo", "copy", "growth", "campaign", "pricing",
+        )):
             needs.add("marketer")
-        if any(k in t for k in ("analytics", "metrics", "research", "analysis", "insight", "survey", "data")):
+        if any(k in t for k in (
+            "analytics", "metrics", "research", "analysis", "insight", "survey", "data", "benchmark",
+            "quality", "qa", "test", "evaluation", "telemetry",
+        )):
             needs.add("analyst")
         return needs or {"frontend_engineer"}
 
@@ -460,19 +473,20 @@ class Operator:
                         )
                     directive = (
                         "Expand the permanent workforce so the company is fully staffed for its "
-                        f"mission and roadmap. Current permanent headcount is {headcount}; the "
-                        f"company should be about {TARGET_HEADCOUNT} people. Propose amendments that "
-                        "satisfy EVERY open staffing request (use each staffing_request_id), and add "
-                        "the ICs the roadmap needs so several CROSS-FUNCTIONAL PODS can each ship a "
-                        "goal end-to-end in parallel. Build balanced pods: each pod is ONE lead plus "
-                        "a MIX of a designer, one or two frontend engineers, and a QA/test analyst "
-                        "(add a backend engineer or marketer where the goals need it) — do NOT "
-                        "create single-discipline silo teams. First BALANCE existing pods by adding "
-                        "the missing profession UNDER an existing pod lead (set reports_to to that "
-                        "lead); reuse existing leads and only add a NEW pod lead when there is enough "
-                        "parallel work for another full balanced pod. NEVER leave an IC reporting to "
-                        "the CEO. Only pod leads report to the CEO. Keep the org non-flat and at most "
-                        "two layers below the CEO."
+                        f"mission and roadmap. Current permanent headcount is {headcount}; grow toward "
+                        f"about {TARGET_HEADCOUNT} people only as the roadmap actually requires. Propose "
+                        "amendments that satisfy EVERY open staffing request (use each "
+                        "staffing_request_id), and add the ICs the roadmap needs so several "
+                        "CROSS-FUNCTIONAL PODS can each ship a goal end-to-end in parallel. Each pod is "
+                        "ONE lead plus the MIX of disciplines that pod's goals actually require — infer "
+                        "the right professions from the work itself (product, design, frontend, "
+                        "backend/systems, quality/analysis, marketing, or whatever the mission calls "
+                        "for); do NOT assume a fixed recipe and do NOT create single-discipline silo "
+                        "teams. First BALANCE existing pods by adding the missing profession UNDER an "
+                        "existing pod lead (set reports_to to that lead); reuse existing leads and only "
+                        "add a NEW pod lead when there is enough parallel work for another full pod. "
+                        "NEVER leave an IC reporting to the CEO. Only pod leads report to the CEO. Keep "
+                        "the org non-flat and at most two layers below the CEO."
                         + bottleneck_line
                     )
                     await self.submit_run("formation", directive)
