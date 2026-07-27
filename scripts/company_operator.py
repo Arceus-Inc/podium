@@ -38,6 +38,14 @@ STATUS_FILE = OUT / "STATUS.md"
 
 TARGET_HEADCOUNT = int(os.environ.get("OPERATOR_TARGET_HEADCOUNT", "12"))
 MAX_HEADCOUNT = int(os.environ.get("OPERATOR_MAX_HEADCOUNT", "18"))
+# Hard safety cap on how many expansion (formation) beats the growth daemon may EVER fire. Growth
+# is pull-based, so this is only a backstop against a pathological loop (e.g. a lead re-filing a
+# staffing request the approval cap keeps skipping): each formation beat is an expensive CEO sprint
+# that often fails the review gate, so we never let them run away and burn money for nothing.
+MAX_EXPANSIONS = int(os.environ.get("OPERATOR_MAX_EXPANSIONS", "8"))
+# Below this, ramp up to form a couple of viable pods; at/above it, only hire on REAL demand
+# (an open staffing request from a lead). Growth is PULL, not push.
+MIN_VIABLE_HEADCOUNT = int(os.environ.get("OPERATOR_MIN_VIABLE_HEADCOUNT", "8"))
 MAX_ACTIVE_GOALS = int(os.environ.get("OPERATOR_MAX_ACTIVE_GOALS", "3"))
 DELEGATION_SPEND_LIMIT_CENTS = 5_000_000  # generous per-goal budget
 
@@ -64,9 +72,11 @@ ROADMAP: list[tuple[str, str]] = [
      "scale, and base components (button, card, input, dialog) with docs. Ship runnable npm "
      "scripts and unit tests with captured evidence."),
     ("Lumen brand & voice guide",
-     "Deliver a brand and voice guide for Lumen (no code): logo usage rules, a color and typography "
-     "rationale, tone-of-voice principles, and example marketing copy/taglines for each app. Produce "
-     "a well-structured written guide document with concrete examples."),
+     "Deliver Lumen's brand as the designer's STANDARD, verifiable artifacts (not a free-form file): a "
+     "DESIGN.md brand system with a color/palette section (calm brand tokens) and a typography scale and "
+     "visual theme, and a design_spec.md with a tokens/components section, a states section, and an "
+     "accessibility section. Fold the logo usage rules, tone-of-voice principles, and example "
+     "copy/taglines into those two documents. Land DESIGN.md and design_spec.md."),
     ("Pomodoro focus timer",
      "Deliver a Pomodoro focus timer web app: configurable work/break intervals, start/pause/reset, "
      "a session history, gentle end-of-interval notification, and a calm minimal UI. Ship runnable "
@@ -76,9 +86,10 @@ ROADMAP: list[tuple[str, str]] = [
      "buffer, and a summary view — with no third-party network calls. Ship runnable npm scripts "
      "and unit tests with captured evidence."),
     ("Go-to-market content & SEO plan",
-     "Deliver a go-to-market content plan (no code): landing-page copy, three blog-post outlines, an "
-     "SEO keyword map, and a four-week social launch calendar. Produce clear written deliverables "
-     "ready for review."),
+     "Deliver Lumen's go-to-market plan as the marketer's STANDARD, verifiable artifact (not a free-form "
+     "file): a single substantive content_draft.md (>= 300 words) containing landing-page copy, three "
+     "blog-post outlines, an SEO keyword map, and a four-week social launch calendar. Land "
+     "content_draft.md."),
     ("Daily habit tracker",
      "Deliver a daily habit tracker: add/remove habits, mark done per day, a streak view and a "
      "weekly grid, localStorage persistence, and a calm accessible UI. Ship runnable npm scripts "
@@ -115,6 +126,7 @@ class Operator:
         self._approved_plans: set[str] = set()
         self._plan_attempts: dict[str, int] = {}
         self._expansion_inflight = False
+        self._expansions = 0  # total expansion (formation) beats fired — capped by MAX_EXPANSIONS
         self._founded = False  # set once the first real workforce plan is approved
 
     # ---- infra ----------------------------------------------------------
@@ -232,29 +244,42 @@ class Operator:
 
     @staticmethod
     def goal_needs(title: str, brief: str) -> set[str]:
-        """Best-effort professions a goal needs, inferred from its title/brief keywords.
+        """Best-effort IC professions a goal needs, inferred from its title/brief keywords.
 
         A lead can only decompose work onto its own direct reports, so a goal must be routed to a
-        lead whose team actually contains these professions — otherwise the lead's beats fail.
+        lead whose team actually contains these professions — otherwise the lead's beats fail. The
+        keyword sets are deliberately DOMAIN-GENERAL (not tied to any one product) so this routes
+        sensibly for anything from a markdown editor to a video editor to a data pipeline.
         """
         t = f"{title} {brief}".lower()
         needs: set[str] = set()
         if any(k in t for k in (
-            "app", "web app", "ui", "npm", "e2e", "playwright", "editor", "timer", "tracker",
-            "component", "package", "module", "localstorage", "frontend", "site", "page",
-            "render", "keyboard", "notification", "grid", "dialog",
+            "app", "web", "ui", "ux", "npm", "e2e", "playwright", "editor", "timer", "tracker",
+            "component", "package", "module", "localstorage", "frontend", "client", "site", "page",
+            "render", "canvas", "webgl", "timeline", "playback", "preview", "panel", "keyboard",
+            "shortcut", "notification", "grid", "dialog", "interaction", "gesture", "drag", "scrub",
         )):
             needs.add("frontend_engineer")
-        if any(k in t for k in ("storage", "sync", "backend", "api", "persistence", "server", "buffer")):
+        if any(k in t for k in (
+            "storage", "sync", "backend", "api", "persistence", "server", "buffer", "database",
+            "pipeline", "encode", "decode", "codec", "transcode", "stream", "gpu", "compute",
+            "model", "inference", "ml", "ai", "export", "import", "file", "format", "performance",
+            "latency", "memory", "worker", "queue", "cache", "infrastructure", "scaling", "realtime",
+        )):
             needs.add("backend_engineer")
         if any(k in t for k in (
             "design system", "design", "brand", "theme", "typography", "tokens", "spacing",
-            "accessible", "accessibility", "ux", "wireframe", "visual",
+            "accessible", "accessibility", "wireframe", "visual", "layout", "icon", "motion",
         )):
             needs.add("designer")
-        if any(k in t for k in ("market", "landing", "launch", "content", "seo", "copy", "growth", "campaign")):
+        if any(k in t for k in (
+            "market", "landing", "launch", "content", "seo", "copy", "growth", "campaign", "pricing",
+        )):
             needs.add("marketer")
-        if any(k in t for k in ("analytics", "metrics", "research", "analysis", "insight", "survey", "data")):
+        if any(k in t for k in (
+            "analytics", "metrics", "research", "analysis", "insight", "survey", "data", "benchmark",
+            "quality", "qa", "test", "evaluation", "telemetry",
+        )):
             needs.add("analyst")
         return needs or {"frontend_engineer"}
 
@@ -296,18 +321,27 @@ class Operator:
         return ranked
 
     def pick_lead_for_goal(self, org: dict[str, Any], leads: list[dict[str, Any]],
-                           title: str, brief: str, load: dict[str, int]) -> dict[str, Any] | None:
-        """Route a goal to a capable lead, spreading work so teams run in parallel.
+                           title: str, brief: str, load: dict[str, int], *,
+                           exclude: set[str] | None = None,
+                           allow_busy: bool = True) -> dict[str, Any] | None:
+        """Route a goal to a capable lead, fanning goals across DISTINCT pods for parallelism.
 
-        Preference order per lead: (1) does the team FULLY cover the goal's needs — a lead whose
-        team has every required profession can execute the goal end-to-end; (2) is it *eligible* at
-        all (covers >=1 need — otherwise its beats fail); (3) LEAST-LOADED first so concurrent goals
-        fan out to different teams rather than piling onto one; (4) coverage as the final tie-break.
-        Preferring full coverage keeps capability correct, while the load term still spreads work
-        whenever several leads are equally capable — "a few on one goal, others on others".
+        A pod lead runs ONE mission (goal) at a time: concurrent goals should fan out to different
+        pod leads so several cross-functional pods ship in parallel, instead of piling every goal
+        onto whoever was hired first (the failure that left later pods idle and one IC doing all the
+        work). ``exclude`` is the set of leads already running a goal this cycle; a FREE capable lead
+        is always preferred over a busy one. When every capable lead is busy and ``allow_busy`` is
+        False, return ``None`` to HOLD the goal — growth then hires another pod to cover it (real
+        pull). Only when the org can no longer grow (at the headcount cap) do we place a second goal
+        on an already-busy lead.
+
+        Preference order per lead: (1) FREE (not already running a goal); (2) team FULLY covers the
+        goal's needs; (3) *eligible* at all (covers >=1 need — else its beats fail); (4) least-loaded;
+        (5) coverage; (6) team size.
         """
         if not leads:
             return None
+        exclude = exclude or set()
         needs = self.goal_needs(title, brief)
         scored = []
         for ld in leads:
@@ -315,13 +349,19 @@ class Operator:
             coverage = len(needs & roles)
             full = 1 if needs and coverage == len(needs) else 0
             eligible = 1 if coverage >= 1 else 0
-            scored.append((full, eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
-        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3], s[4]), reverse=True)
+            free = 0 if ld["id"] in exclude else 1
+            scored.append((free, full, eligible, -load.get(ld["id"], 0), coverage, len(roles), ld))
+        scored.sort(key=lambda s: (s[0], s[1], s[2], s[3], s[4], s[5]), reverse=True)
         best = scored[0]
-        # If nobody can cover ANY need, don't hand it to an incapable lead — wait for a better fit.
-        if best[1] == 0:
+        # Nobody can cover ANY need — don't hand it to an incapable lead; wait for a better-fitting
+        # pod (growth may add one).
+        if best[2] == 0:
             return None
-        return best[5]
+        # The only capable leads are already busy: hold the goal for a fresh pod so goals run in
+        # parallel — unless the org is at its growth ceiling, in which case a busy lead takes it.
+        if best[0] == 0 and not allow_busy:
+            return None
+        return best[6]
 
     # ---- daemons --------------------------------------------------------
     async def approvals_daemon(self) -> None:
@@ -380,7 +420,8 @@ class Operator:
                     await asyncio.sleep(15)
                     continue
                 org = await self.org()
-                headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
+                emps = [e for e in org["employees"] if e["status"] != "terminated"]
+                headcount = len(emps)
                 open_reqs = [r for r in org["staffing"] if str(r["status"]).lower() == "open"]
                 bottlenecks = self.bottleneck_professions(org)
                 if headcount >= MAX_HEADCOUNT:
@@ -388,7 +429,35 @@ class Operator:
                     # don't waste formation beats churning against the ceiling.
                     await asyncio.sleep(30)
                     continue
-                if headcount < TARGET_HEADCOUNT or open_reqs or bottlenecks:
+                # PULL-BASED growth (audit A4): hire only on REAL demand, never on a push signal.
+                #  (a) a lead filed an open staffing_request (someone actually asked), or
+                #  (b) initial ramp: the org is still below a minimal viable size AND nobody is idle.
+                # Never hire while ICs are already sitting idle with no task — that is how the org
+                # ballooned to 18 with 11 people who never did anything.
+                assigned = {t["assignee_employee_id"] for t in org["tasks"] if t["assignee_employee_id"]}
+                idle_ics = [
+                    e for e in emps
+                    if e["role"] != "ceo" and not e["can_lead"] and e["id"] not in assigned
+                ]
+                # Growth is PULL, not push: the ONLY reasons to fire an expensive, often-rejected
+                # formation beat are (a) a lead actually filed an open staffing_request, or (b) the
+                # initial ramp to a minimally-viable org. A backlog of goals waiting behind busy
+                # leads is NOT a hire signal — that is the normal state of any company, and the
+                # delegation daemon already re-delegates a queued goal the instant a lead frees up.
+                #
+                # Treating a held goal as growth demand was the ROOT CAUSE of the failed beats:
+                # goals queued behind the (correctly bounded) leads kept the signal true, so every
+                # ~3 minutes the CEO re-authored the entire roadmap (29 goals for ~10 real outcomes)
+                # and each formation beat failed the approval/review gate — 16 of 21 wasted beats
+                # and two-thirds of spend in the audited run. Parallelism comes from delegating one
+                # goal per lead the INITIAL formation created, not from perpetual re-hiring.
+                want_growth = bool(open_reqs) or (
+                    headcount < MIN_VIABLE_HEADCOUNT and len(idle_ics) < 2
+                )
+                if not want_growth or self._expansions >= MAX_EXPANSIONS:
+                    await asyncio.sleep(30)
+                    continue
+                if True:
                     self._expansion_inflight = True
                     bottleneck_line = ""
                     if bottlenecks:
@@ -404,22 +473,24 @@ class Operator:
                         )
                     directive = (
                         "Expand the permanent workforce so the company is fully staffed for its "
-                        f"mission and roadmap. Current permanent headcount is {headcount}; the "
-                        f"company should be about {TARGET_HEADCOUNT} people. Propose amendments that "
-                        "satisfy EVERY open staffing request (use each staffing_request_id), and add "
-                        "the ICs the roadmap needs so several CROSS-FUNCTIONAL PODS can each ship a "
-                        "goal end-to-end in parallel. Build balanced pods: each pod is ONE lead plus "
-                        "a MIX of a designer, one or two frontend engineers, and a QA/test analyst "
-                        "(add a backend engineer or marketer where the goals need it) — do NOT "
-                        "create single-discipline silo teams. First BALANCE existing pods by adding "
-                        "the missing profession UNDER an existing pod lead (set reports_to to that "
-                        "lead); reuse existing leads and only add a NEW pod lead when there is enough "
-                        "parallel work for another full balanced pod. NEVER leave an IC reporting to "
-                        "the CEO. Only pod leads report to the CEO. Keep the org non-flat and at most "
-                        "two layers below the CEO."
+                        f"mission and roadmap. Current permanent headcount is {headcount}; grow toward "
+                        f"about {TARGET_HEADCOUNT} people only as the roadmap actually requires. Propose "
+                        "amendments that satisfy EVERY open staffing request (use each "
+                        "staffing_request_id), and add the ICs the roadmap needs so several "
+                        "CROSS-FUNCTIONAL PODS can each ship a goal end-to-end in parallel. Each pod is "
+                        "ONE lead plus the MIX of disciplines that pod's goals actually require — infer "
+                        "the right professions from the work itself (product, design, frontend, "
+                        "backend/systems, quality/analysis, marketing, or whatever the mission calls "
+                        "for); do NOT assume a fixed recipe and do NOT create single-discipline silo "
+                        "teams. First BALANCE existing pods by adding the missing profession UNDER an "
+                        "existing pod lead (set reports_to to that lead); reuse existing leads and only "
+                        "add a NEW pod lead when there is enough parallel work for another full pod. "
+                        "NEVER leave an IC reporting to the CEO. Only pod leads report to the CEO. Keep "
+                        "the org non-flat and at most two layers below the CEO."
                         + bottleneck_line
                     )
                     await self.submit_run("formation", directive)
+                    self._expansions += 1
                     # wait (up to ~150s) for the approval daemon to clear the flag, else clear it
                     for _ in range(30):
                         if not self._expansion_inflight:
@@ -485,9 +556,49 @@ class Operator:
             try:
                 org = await self.org()
                 leads = self.leads(org)
+                # AUTHORITATIVE completion: the engine flips the ledger goal to 'done' when its
+                # delegation-root task lands done. Trust that over the product-run status, which can
+                # loop or false-pass. Map ledger goal id -> status for this cycle (ids come back from
+                # asyncpg as UUID objects; goal_runs keys are strings, so normalise with str()).
+                ledger_goal_status = {str(g["id"]): g["status"] for g in org["goals"]}
+                # A goal whose delegation gave up — root delegation task BLOCKED with an active
+                # "integrate_iteration_exhausted" recovery — is STRANDED (its subtasks never
+                # converged, e.g. a subjective written deliverable the reviewer kept rejecting). A
+                # real company shelves a stuck goal and moves on rather than letting it clog the
+                # active-goal slots forever, so retire it and let goal_daemon queue the next one.
+                stranded_rows = await self.q(
+                    "select distinct t.goal_id from task t "
+                    "join recovery_action ra on ra.source_task_id=t.id and ra.company_id=t.company_id "
+                    "where t.company_id=$1 and t.execution_mode='delegation' and t.parent_id is null "
+                    "and t.status='blocked' and ra.status='active' "
+                    "and ra.cause='integrate_iteration_exhausted'",
+                    uuid.UUID(self.co))
+                stranded = {str(r["goal_id"]) for r in stranded_rows if r["goal_id"]}
                 # refresh statuses of in-flight goal runs
                 for gid, info in list(self.goal_runs.items()):
-                    if info.get("run_id") and info["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done"):
+                    terminal = ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")
+                    if info["status"] in terminal:
+                        continue
+                    # (a) ledger goal rolled up to done -> retire it and let goal_daemon queue next
+                    if ledger_goal_status.get(gid) == "done":
+                        info["status"] = "done"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='done',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' COMPLETED (ledger roll-up)")
+                        continue
+                    # (a2) delegation stranded (never converged) -> shelve it, free the slot
+                    if gid in stranded:
+                        info["status"] = "stranded"
+                        assert self.db is not None
+                        self.db.execute("UPDATE goals SET status='stranded',done_at=? WHERE goal_id=?",
+                                        (now(), gid))
+                        self.db.commit()
+                        self.log(f"goal '{info['title'][:40]}' SHELVED (delegation stranded — moving on)", "warn")
+                        continue
+                    # (b) fall back to the delegation product-run terminal status
+                    if info.get("run_id"):
                         st = await self.run_status(info["run_id"])
                         if st and st["status"] in ("succeeded", "failed", "canceled", "timed_out"):
                             info["status"] = st["status"]
@@ -499,20 +610,26 @@ class Operator:
                             self.db.commit()
                             self.log(f"goal '{info['title'][:40]}' finished ({st['status']})")
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")]
                 running = [i for i in active if i.get("run_id")]
                 # current load per lead (running goals already assigned to them)
                 load: dict[str, int] = {}
                 for i in running:
                     if i.get("lead"):
                         load[i["lead"]] = load.get(i["lead"], 0) + 1
-                # launch delegation runs for goals that have none yet, routed by capability
+                # launch delegation runs for goals that have none yet, routed by capability and
+                # FANNED across distinct pods (one active goal per lead) so pods ship in parallel.
                 if leads:
+                    headcount = len([e for e in org["employees"] if e["status"] != "terminated"])
+                    at_cap = headcount >= MAX_HEADCOUNT
+                    busy_leads = {i["lead"] for i in running if i.get("lead")}
                     for gid, info in self.goal_runs.items():
                         if info.get("run_id") is None and len(running) < MAX_ACTIVE_GOALS:
-                            lead = self.pick_lead_for_goal(org, leads, info["title"], info["brief"], load)
+                            lead = self.pick_lead_for_goal(
+                                org, leads, info["title"], info["brief"], load,
+                                exclude=busy_leads, allow_busy=at_cap)
                             if lead is None:
-                                continue  # no capable lead free right now; retry next cycle
+                                continue  # no FREE capable pod right now — hold; growth adds one
                             rid = await self.submit_run("delegation", info["brief"], goal_id=gid,
                                                         lead=lead["id"], max_team_size=int(lead["team"]) or 4)
                             if rid:
@@ -520,6 +637,7 @@ class Operator:
                                 info["lead"] = lead["id"]
                                 info["status"] = "running"
                                 running.append(info)
+                                busy_leads.add(lead["id"])
                                 load[lead["id"]] = load.get(lead["id"], 0) + 1
                                 self.log(f"delegated '{info['title'][:34]}' -> {lead['name']}")
             except Exception as e:  # noqa: BLE001
@@ -532,7 +650,7 @@ class Operator:
         while True:
             try:
                 active = [i for i in self.goal_runs.values()
-                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")]
+                          if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")]
                 if len(active) < MAX_ACTIVE_GOALS:
                     title, brief = self.next_roadmap_item()
                     existing_titles = {i["title"] for i in self.goal_runs.values()}
@@ -565,7 +683,7 @@ class Operator:
                 running = sum(1 for t in tasks if t["status"] in ("in_progress", "IN_PROGRESS"))
                 goals_done = sum(1 for i in self.goal_runs.values() if i["status"] in ("done", "succeeded"))
                 goals_active = len([i for i in self.goal_runs.values()
-                                    if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done")])
+                                    if i["status"] not in ("succeeded", "failed", "canceled", "timed_out", "done", "stranded")])
                 assert self.db is not None
                 self.db.execute(
                     "INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",

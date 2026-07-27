@@ -1,0 +1,1760 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen — Company Run Report</title>
+<style>
+:root{--bg:#f6f8fa;--card:#fff;--ink:#1f2328;--muted:#57606a;--line:#d0d7de;--accent:#0d9488;--accent-soft:#ecfeff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:32px 20px 80px}
+header.top{background:linear-gradient(135deg,#ecfeff,#f6f8fa);border:1px solid var(--line);border-radius:16px;padding:28px 28px 22px;margin-bottom:22px}
+header.top .eyebrow{color:var(--accent);font-weight:700;letter-spacing:.06em;text-transform:uppercase;font-size:12px}
+header.top h1{margin:.2em 0 .3em;font-size:26px}
+header.top .intent{color:var(--muted);margin:0}
+header.top .intent b{color:var(--ink)}
+.badge{font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px}
+.badge.ok{background:#dcfce7;color:#166534}
+.badge.warn{background:#fef9c3;color:#854d0e}
+.badge.err{background:#fee2e2;color:#b91c1c}
+.badge.bad{background:#fee2e2;color:#b91c1c}
+.badge.info{background:var(--accent-soft);color:#0e7490}
+.reverify{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:6px 20px 18px;margin:22px 0}
+.reverify h2{font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:16px 0 6px}
+.vrow{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px dashed var(--line)}
+.vrow:last-of-type{border-bottom:none}
+.vlabel{min-width:230px;font-weight:600;font-size:14px}
+.vrow .muted{color:var(--muted);font-size:12.5px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.overall{display:flex;align-items:center;gap:14px;margin-top:14px;padding:14px 16px;border-radius:12px}
+.overall.ok{background:#f0fdf4;border:1px solid #bbf7d0}
+.overall.warn{background:#fffbeb;border:1px solid #fde68a}
+.overall .big{font-size:18px;font-weight:800;letter-spacing:.02em}
+.overall.ok .big{color:#166534}
+.overall.warn .big{color:#854d0e}
+.overall p{margin:0;color:var(--muted);font-size:13px}
+.chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin:22px 0}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;color:var(--muted);font-size:12.5px}
+.chip span{display:block;font-size:24px;font-weight:750;color:var(--ink);line-height:1.1}
+h2.sec{font-size:15px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:38px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+.pod{border-left:4px solid var(--accent)}
+.pod h3{margin:0 0 2px;font-size:16px}
+.pod .who{color:var(--muted);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+tr:last-child td{border-bottom:none}
+.mono{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.tree{list-style:none;padding-left:0;margin:0}
+.tree ul{list-style:none;margin:4px 0 4px 22px;padding-left:14px;border-left:1px dashed var(--line)}
+.tree li{margin:4px 0}
+.node{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap}
+.node .t{font-weight:600}
+.pill{font-size:11px;font-weight:700;padding:1px 8px;border-radius:999px;background:#eef2ff;color:#3730a3}
+.pill.done{background:#dcfce7;color:#166534}
+.pill.active,.pill.in_progress{background:#dbeafe;color:#1e40af}
+.pill.blocked{background:#fef3c7;color:#92400e}
+.pill.rejected,.pill.failed,.pill.cancelled{background:#fee2e2;color:#b91c1c}
+.pill.todo,.pill.proposed{background:#f3f4f6;color:#374151}
+.pill.role{background:#f3e8ff;color:#6b21a8}
+.shot{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:16px}
+.shot img{width:100%;border-radius:8px;border:1px solid var(--line);display:block}
+.shot .cap{color:var(--muted);font-size:13px;margin-top:8px;text-transform:capitalize}
+details.art{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+details.art>summary{cursor:pointer;padding:12px 16px;font-weight:600;display:flex;gap:10px;align-items:center}
+details.art>summary .meta{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+details.art pre{margin:0;padding:0 16px 16px;white-space:pre-wrap;word-wrap:break-word;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#24292f;max-height:560px;overflow:auto}
+.docprev{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px 22px 18px}
+.docprev h1{font-size:20px}.docprev h2{font-size:16px;border:none;text-transform:none;letter-spacing:0;color:var(--ink);margin:16px 0 6px}
+.docprev h3{font-size:14px}.docprev code{background:#f3f4f6;padding:1px 5px;border-radius:5px;font-size:12.5px}
+.grpname{font-weight:700;color:var(--accent);margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.04em}
+.outcome{font-size:11.5px;color:var(--muted)}
+footer{color:var(--muted);font-size:12px;text-align:center;margin-top:44px}
+.legend{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+</style></head><body><div class=wrap>
+<header class="top"><div class="eyebrow">Chorus · Company Run · Lumen</div>
+<h1>Company Run Report</h1>
+<p class="intent"><b>Mission:</b> Found and operate &#x27;Lumen&#x27;, a calm-productivity startup — a suite of small, privacy-first web apps on a shared calm design system.</p>
+<p class="intent" style="margin-top:8px"><b>Company:</b> <span class="mono">019f8959-9276-73b6-8ce0-71797de18b07</span></p></header>
+<div class="chips">
+<div class="chip"><span>14</span>Employees</div>
+<div class="chip"><span>2</span>Pod leads</div>
+<div class="chip"><span>13</span>Goals</div>
+<div class="chip"><span>27</span>Tasks</div>
+<div class="chip"><span>73</span>Beats</div>
+<div class="chip"><span>41</span>Succeeded</div>
+<div class="chip"><span>32</span>Failed</div>
+<div class="chip"><span>21</span>Artifacts</div>
+<div class="chip"><span>$27.86</span>Spend</div>
+</div>
+<div class="reverify"><h2>Company health — automatic audit</h2>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">Duplicate employees</span><span class="muted">none — every person is unique</span></div>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">Real person names</span><span class="muted">every hire has a real given name</span></div>
+<div class="vrow"><span class="dot" style="background:#9a6700"></span><span class="vlabel">Idle / stale employees</span><span class="muted">2 with 0 tasks and 0 beats: Ravi, Elena</span></div>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">Only leads report to the CEO</span><span class="muted">yes — CEO&#x27;s only reports are pod leads</span></div>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">Goals completing (roll-up)</span><span class="muted">2 of 13 goals reached done — roadmap is advancing</span></div>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">No redone work</span><span class="muted">each subtask is done once</span></div>
+<div class="vrow"><span class="dot" style="background:#cf222e"></span><span class="vlabel">Delegations converge (not stranded)</span><span class="muted">1 delegation(s) gave up with work unfinished</span></div>
+<div class="vrow"><span class="dot" style="background:#1a7f37"></span><span class="vlabel">CEO records decisions</span><span class="muted">2 CEO decision(s) recorded, 2 with a rationale (e.g. “The reality digest contains one active goal: build a cursor-type product for video editors…”)</span></div>
+<div class="overall warn"><span class="big">STRUCTURAL ISSUES REMAIN</span><p>1 blocking · 1 warnings across 8 checks — the report re-audits AUDIT.md every time it is generated.</p></div></div>
+<h2 class="sec">The company — cross-functional pods</h2>
+<div class="legend">CEO &rarr; pod leads &rarr; ICs. Each row shows the person, their profession, and their beat record.</div>
+<div class="card">
+<div class="node"><span class="t">Casey</span> <span class="pill role">ceo</span> <span style="margin-left:auto"><span class="pill done">12 ok</span> <span class="pill failed">12 fail</span> · $3.16</span></div>
+<table style="margin-top:10px"><tr><th>IC</th><th>Profession</th><th>Beats</th></tr>
+<tr><td>Ava</td><td><span class="pill role">pm</span></td><td><span class="pill done">18 ok</span> <span class="pill failed">2 fail</span> · $1.15</td></tr>
+<tr><td>Jordan</td><td><span class="pill role">pm</span></td><td><span class="pill done">7 ok</span> · $0.64</td></tr>
+</table>
+</div>
+<div class="card pod">
+<div class="node"><span class="t">Ava</span> <span class="pill role">pm</span> <span class="pill role">pod lead</span> <span style="margin-left:auto"><span class="pill done">18 ok</span> <span class="pill failed">2 fail</span> · $1.15</span></div>
+<div class="who">team size 6 · depth 1</div>
+<table style="margin-top:10px"><tr><th>IC</th><th>Profession</th><th>Beats</th></tr>
+<tr><td>Leo</td><td><span class="pill role">frontend_engineer</span></td><td><span class="pill done">2 ok</span> · $8.40</td></tr>
+<tr><td>Mina</td><td><span class="pill role">designer</span></td><td><span class="muted">no beats</span></td></tr>
+<tr><td>Owen</td><td><span class="pill role">analyst</span></td><td><span class="pill failed">4 fail</span> · $0.71</td></tr>
+<tr><td>Priya</td><td><span class="pill role">backend_engineer</span></td><td><span class="pill failed">6 fail</span> · $6.58</td></tr>
+<tr><td>Tess</td><td><span class="pill role">analyst</span></td><td><span class="muted">no beats</span></td></tr>
+<tr><td>Elena</td><td><span class="pill role">analyst</span></td><td><span class="muted">no beats</span></td></tr>
+</table>
+</div>
+<div class="card pod">
+<div class="node"><span class="t">Jordan</span> <span class="pill role">pm</span> <span class="pill role">pod lead</span> <span style="margin-left:auto"><span class="pill done">7 ok</span> · $0.64</span></div>
+<div class="who">team size 6 · depth 1</div>
+<table style="margin-top:10px"><tr><th>IC</th><th>Profession</th><th>Beats</th></tr>
+<tr><td>Devon</td><td><span class="pill role">frontend_engineer</span></td><td><span class="pill done">1 ok</span> <span class="pill failed">2 fail</span> · $0.78</td></tr>
+<tr><td>Nikhil</td><td><span class="pill role">backend_engineer</span></td><td><span class="pill failed">2 fail</span> · $0.30</td></tr>
+<tr><td>Quinn</td><td><span class="pill role">analyst</span></td><td><span class="pill failed">1 fail</span> · $0.08</td></tr>
+<tr><td>Samara</td><td><span class="pill role">designer</span></td><td><span class="pill done">1 ok</span> <span class="pill failed">3 fail</span> · $6.06</td></tr>
+<tr><td>Ravi</td><td><span class="pill role">analyst</span></td><td><span class="muted">no beats</span></td></tr>
+</table>
+</div>
+<h2 class="sec">Goal tree</h2>
+<ul class="tree">
+<li><div class="node"><span class="t">build a cursor type product for video editors</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">MVP desktop app captures global input and renders a low-latency cursor overlay with basic mode switching</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Editor-focused cursor modes for timeline work (scrub/trim/snap) with a near-cursor assist UI</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Profiles &amp; configuration: per-app detection, customizable hotkeys, and persistent settings for cursor behavior</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Measurement loop: telemetry dashboard + release quality gate to support go/no-go on deeper integrations</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">MVP desktop app captures global input and renders a low-latency cursor overlay with basic mode switching</span><span class="pill done">done</span> &rarr; <span class="pill role">Ava</span></div>
+</li>
+<li><div class="node"><span class="t">Editor-focused cursor modes for timeline work (scrub/trim/snap) with a near-cursor assist UI</span><span class="pill done">done</span> &rarr; <span class="pill role">Jordan</span></div>
+</li>
+<li><div class="node"><span class="t">Measurement loop: telemetry dashboard + release quality gate to support go/no-go on deeper integrations</span><span class="pill active">active</span> &rarr; <span class="pill role">Ava</span></div>
+</li>
+<li><div class="node"><span class="t">Profiles &amp; configuration: per-app detection, customizable hotkeys, and persistent settings for cursor behavior</span><span class="pill active">active</span> &rarr; <span class="pill role">Jordan</span></div>
+</li>
+<li><div class="node"><span class="t">MVP desktop app captures global input and renders a low-latency cursor overlay with basic mode switching</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Editor-focused cursor modes for timeline work (scrub/trim/snap) with a near-cursor assist UI</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Measurement loop: telemetry dashboard + release quality gate to support go/no-go on deeper integrations</span><span class="pill active">active</span></div>
+</li>
+<li><div class="node"><span class="t">Profiles &amp; configuration: per-app detection, customizable hotkeys, and persistent settings for cursor behavior</span><span class="pill active">active</span></div>
+</li>
+</ul>
+<h2 class="sec">Task decomposition</h2>
+<div class="legend">Delegation tasks are what a pod lead owns; delivery tasks are IC work items the lead decomposed them into.</div>
+<ul class="tree">
+<li><div class="node"><span class="t">This is a FORMATION directive: form the permanent organization for the objective below — do NOT build the prod</span><span class="pill blocked">blocked</span><span class="outcome">delivery</span> <span class="pill role">Casey</span></div>
+</li>
+<li><div class="node"><span class="t">MVP desktop app captures global input and renders a low-latency cursor overlay with basic mode switching. With</span><span class="pill done">done</span><span class="outcome">delegation</span> <span class="pill role">Ava</span></div>
+<ul>
+<li><div class="node"><span class="t">Implement Windows app loop providing global input capture while unfocused, always-on-top cursor overlay surfac</span><span class="pill done">done</span><span class="outcome">delivery</span> <span class="pill role">Leo</span></div>
+</li>
+<li><div class="node"><span class="t">Implement automated harness: (1) integration tests verifying global input capture while unfocused, overlay vis</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Owen</span></div>
+</li>
+<li><div class="node"><span class="t">Implement Windows global pointer capture (works unfocused), low-latency cursor overlay render loop, and basic </span><span class="pill done">done</span><span class="outcome">delivery</span> <span class="pill role">Leo</span></div>
+</li>
+</ul>
+</li>
+<li><div class="node"><span class="t">Editor-focused cursor modes for timeline work (scrub/trim/snap) with a near-cursor assist UI. The MVP must dem</span><span class="pill done">done</span><span class="outcome">delegation</span> <span class="pill role">Jordan</span></div>
+<ul>
+<li><div class="node"><span class="t">Implement Scrub/Trim/Snap cursor modes on the timeline with mode switching UI, pointer behavior changes (scrub</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Devon</span></div>
+</li>
+<li><div class="node"><span class="t">Create an in-repo runnable moderated usability test harness for 5 participants covering the 3 benchmark tasks </span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Quinn</span></div>
+</li>
+<li><div class="node"><span class="t">Implement automated evaluator test(s) that read the captured dataset and compute per-task success rate and med</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Nikhil</span></div>
+</li>
+<li><div class="node"><span class="t">Define minimal UX/design spec for near-cursor assist UI per mode (scrub/trim/snap): visuals, copy, states, edg</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Samara</span></div>
+</li>
+<li><div class="node"><span class="t">Define interaction model for Scrub/Trim/Snap cursor modes, mode switching UX, and near-cursor assist UI conten</span><span class="pill done">done</span><span class="outcome">delivery</span> <span class="pill role">Samara</span></div>
+</li>
+<li><div class="node"><span class="t">Implement Scrub/Trim/Snap cursor modes end-to-end in the timeline UI: mode switching control + 1/2/3 shortcuts</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Devon</span></div>
+</li>
+</ul>
+</li>
+<li><div class="node"><span class="t">Executive review: your evidence base is `company_state.json` in your worktree — the mirrored ledger truth (goa</span><span class="pill done">done</span><span class="outcome">delivery</span> <span class="pill role">Casey</span></div>
+</li>
+<li><div class="node"><span class="t">Measurement loop: telemetry dashboard + release quality gate to support go/no-go on deeper integrations. We ne</span><span class="pill blocked">blocked</span><span class="outcome">delegation</span> <span class="pill role">Ava</span></div>
+<ul>
+<li><div class="node"><span class="t">Implement staging telemetry emission for all critical event types (session_start/end, mode_switch, latency_sam</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Priya</span></div>
+</li>
+<li><div class="node"><span class="t">Add automated verification that asserts 100% of critical event types are present by detecting at least one of </span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Leo</span></div>
+</li>
+<li><div class="node"><span class="t">Provide in-repo telemetry dashboard config/implementation visualizing sessions, mode switches, latency, crashe</span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Mina</span></div>
+</li>
+<li><div class="node"><span class="t">Implement release quality gate script/check consuming telemetry export/fixture and outputting explicit GO/NO-G</span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Owen</span></div>
+</li>
+<li><div class="node"><span class="t">Create recorded trial cohort telemetry dataset fixture/export in-repo and automated verification asserting 10 </span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Tess</span></div>
+</li>
+<li><div class="node"><span class="t">Implement staging telemetry emission for critical events (session_start, session_end, mode_switch, latency_sam</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Priya</span></div>
+</li>
+<li><div class="node"><span class="t">Implement stable telemetry schema + required fields, staging emission hooks (where applicable on server), a lo</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Priya</span></div>
+</li>
+</ul>
+</li>
+<li><div class="node"><span class="t">Profiles &amp; configuration: per-app detection, customizable hotkeys, and persistent settings for cursor behavior</span><span class="pill blocked">blocked</span><span class="outcome">delegation</span> <span class="pill role">Jordan</span></div>
+<ul>
+<li><div class="node"><span class="t">Implement core profile schema, CRUD interfaces, app-&gt;profile resolution logic, and robust persistence (per-pro</span><span class="pill rejected">rejected</span><span class="outcome">delivery</span> <span class="pill role">Nikhil</span></div>
+</li>
+<li><div class="node"><span class="t">Implement customizable hotkeys per profile and wiring so active hotkeys update on active-profile changes; incl</span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Devon</span></div>
+</li>
+<li><div class="node"><span class="t">Implement/bridge active foreground app detection into profile resolver (with testable abstraction) and create </span><span class="pill cancelled">cancelled</span><span class="outcome">delivery</span> <span class="pill role">Quinn</span></div>
+</li>
+<li><div class="node"><span class="t">Identify and correct the working directory/worktree to point at the actual project repository (not just .harne</span><span class="pill in_progress">in_progress</span><span class="outcome">delivery</span> <span class="pill role">Devon</span></div>
+</li>
+</ul>
+</li>
+<li><div class="node"><span class="t">Executive review: your evidence base is `company_state.json` in your worktree — the mirrored ledger truth (goa</span><span class="pill done">done</span><span class="outcome">delivery</span> <span class="pill role">Casey</span></div>
+</li>
+</ul>
+<h2 class="sec">Beats — every heartbeat that ran</h2>
+<div class="card"><table><tr><th>#</th><th>When</th><th>Employee</th><th>Task</th><th>Status</th><th>Outcome</th></tr>
+<tr><td>1</td><td class="mono">10:23:02</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 88¢</td></tr>
+<tr><td>2</td><td class="mono">10:23:02</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 88¢</td></tr>
+<tr><td>3</td><td class="mono">10:23:02</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 88¢</td></tr>
+<tr><td>4</td><td class="mono">10:23:02</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 88¢</td></tr>
+<tr><td>5</td><td class="mono">10:25:01</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 8¢</td></tr>
+<tr><td>6</td><td class="mono">10:25:01</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 8¢</td></tr>
+<tr><td>7</td><td class="mono">10:25:49</td><td>Leo</td><td>Implement Windows app loop providing global </td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 244¢</td></tr>
+<tr><td>8</td><td class="mono">10:25:49</td><td>Owen</td><td>Implement automated harness: (1) integration</td><td><span class="pill failed">failed</span></td><td class="outcome">error: TimeoutError()</td></tr>
+<tr><td>9</td><td class="mono">10:25:49</td><td>Owen</td><td>Implement automated harness: (1) integration</td><td><span class="pill failed">failed</span></td><td class="outcome">error: TimeoutError()</td></tr>
+<tr><td>10</td><td class="mono">10:26:58</td><td>Jordan</td><td>Editor-focused cursor modes for timeline wor</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 9¢</td></tr>
+<tr><td>11</td><td class="mono">10:27:37</td><td>Devon</td><td>Implement Scrub/Trim/Snap cursor modes on th</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;fail&#x27;] · done 0/1 · 65¢</td></tr>
+<tr><td>12</td><td class="mono">10:27:38</td><td>Quinn</td><td>Create an in-repo runnable moderated usabili</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 8¢</td></tr>
+<tr><td>13</td><td class="mono">10:27:38</td><td>Nikhil</td><td>Implement automated evaluator test(s) that r</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 16¢</td></tr>
+<tr><td>14</td><td class="mono">10:27:39</td><td>Samara</td><td>Define minimal UX/design spec for near-curso</td><td><span class="pill failed">failed</span></td><td class="outcome">error: TimeoutError()</td></tr>
+<tr><td>15</td><td class="mono">10:27:58</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 37¢</td></tr>
+<tr><td>16</td><td class="mono">10:27:58</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 37¢</td></tr>
+<tr><td>17</td><td class="mono">10:27:58</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 37¢</td></tr>
+<tr><td>18</td><td class="mono">10:27:58</td><td>Casey</td><td>This is a FORMATION directive: form the perm</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 37¢</td></tr>
+<tr><td>19</td><td class="mono">10:35:51</td><td>Owen</td><td>Implement automated harness: (1) integration</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;, &#x27;fail&#x27;, &#x27;fail&#x27;] · done 0/3 · 71¢</td></tr>
+<tr><td>20</td><td class="mono">10:35:51</td><td>Owen</td><td>Implement automated harness: (1) integration</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;, &#x27;fail&#x27;, &#x27;fail&#x27;] · done 0/3 · 71¢</td></tr>
+<tr><td>21</td><td class="mono">10:39:10</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 10¢</td></tr>
+<tr><td>22</td><td class="mono">10:39:10</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 10¢</td></tr>
+<tr><td>23</td><td class="mono">10:40:29</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;] · done 0/1 · 13¢</td></tr>
+<tr><td>24</td><td class="mono">10:40:29</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;] · done 0/1 · 13¢</td></tr>
+<tr><td>25</td><td class="mono">10:41:02</td><td>Leo</td><td>Implement Windows global pointer capture (wo</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;pass&#x27;] · done 1/1 · 596¢</td></tr>
+<tr><td>26</td><td class="mono">10:42:40</td><td>Samara</td><td>Define minimal UX/design spec for near-curso</td><td><span class="pill failed">failed</span></td><td class="outcome">error: TimeoutError()</td></tr>
+<tr><td>27</td><td class="mono">10:57:41</td><td>Samara</td><td>Define minimal UX/design spec for near-curso</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 274¢</td></tr>
+<tr><td>28</td><td class="mono">11:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;fail&#x27;] · done 0/1 · 72¢</td></tr>
+<tr><td>29</td><td class="mono">11:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;fail&#x27;] · done 0/1 · 72¢</td></tr>
+<tr><td>30</td><td class="mono">11:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;fail&#x27;] · done 0/1 · 72¢</td></tr>
+<tr><td>31</td><td class="mono">11:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;fail&#x27;] · done 0/1 · 72¢</td></tr>
+<tr><td>32</td><td class="mono">11:04:24</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 40¢</td></tr>
+<tr><td>33</td><td class="mono">11:04:24</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 40¢</td></tr>
+<tr><td>34</td><td class="mono">11:04:24</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 40¢</td></tr>
+<tr><td>35</td><td class="mono">11:04:24</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 40¢</td></tr>
+<tr><td>36</td><td class="mono">11:06:22</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;] · done 0/2 · 37¢</td></tr>
+<tr><td>37</td><td class="mono">11:06:22</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;] · done 0/2 · 37¢</td></tr>
+<tr><td>38</td><td class="mono">11:08:28</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome"></td></tr>
+<tr><td>39</td><td class="mono">11:08:28</td><td>Ava</td><td>MVP desktop app captures global input and re</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome"></td></tr>
+<tr><td>40</td><td class="mono">11:08:52</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/3 · 10¢</td></tr>
+<tr><td>41</td><td class="mono">11:08:52</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/3 · 10¢</td></tr>
+<tr><td>42</td><td class="mono">11:09:08</td><td>Jordan</td><td>Editor-focused cursor modes for timeline wor</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 11¢</td></tr>
+<tr><td>43</td><td class="mono">11:09:39</td><td>Priya</td><td>Implement staging telemetry emission for all</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 202¢</td></tr>
+<tr><td>44</td><td class="mono">11:09:39</td><td>Priya</td><td>Implement staging telemetry emission for all</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 202¢</td></tr>
+<tr><td>45</td><td class="mono">11:10:27</td><td>Jordan</td><td>Editor-focused cursor modes for timeline wor</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 10¢</td></tr>
+<tr><td>46</td><td class="mono">11:11:25</td><td>Samara</td><td>Define interaction model for Scrub/Trim/Snap</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;pass&#x27;] · done 1/1 · 332¢</td></tr>
+<tr><td>47</td><td class="mono">11:17:59</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 11¢</td></tr>
+<tr><td>48</td><td class="mono">11:17:59</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/2 · 11¢</td></tr>
+<tr><td>49</td><td class="mono">11:19:09</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/3 · 11¢</td></tr>
+<tr><td>50</td><td class="mono">11:19:09</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/3 · 11¢</td></tr>
+<tr><td>51</td><td class="mono">11:19:50</td><td>Priya</td><td>Implement staging telemetry emission for cri</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 212¢</td></tr>
+<tr><td>52</td><td class="mono">11:19:50</td><td>Priya</td><td>Implement staging telemetry emission for cri</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 212¢</td></tr>
+<tr><td>53</td><td class="mono">11:25:41</td><td>Jordan</td><td>Editor-focused cursor modes for timeline wor</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 15¢</td></tr>
+<tr><td>54</td><td class="mono">11:26:39</td><td>Devon</td><td>Implement Scrub/Trim/Snap cursor modes end-t</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 13¢</td></tr>
+<tr><td>55</td><td class="mono">11:27:39</td><td>Jordan</td><td>Editor-focused cursor modes for timeline wor</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome"></td></tr>
+<tr><td>56</td><td class="mono">11:27:57</td><td>Jordan</td><td>Profiles &amp; configuration: per-app detection,</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 8¢</td></tr>
+<tr><td>57</td><td class="mono">11:28:13</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/4 · 15¢</td></tr>
+<tr><td>58</td><td class="mono">11:28:13</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/4 · 15¢</td></tr>
+<tr><td>59</td><td class="mono">11:28:35</td><td>Nikhil</td><td>Implement core profile schema, CRUD interfac</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 14¢</td></tr>
+<tr><td>60</td><td class="mono">11:29:08</td><td>Priya</td><td>Implement stable telemetry schema + required</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 244¢</td></tr>
+<tr><td>61</td><td class="mono">11:29:08</td><td>Priya</td><td>Implement stable telemetry schema + required</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;needs-changes&#x27;, &#x27;needs-changes&#x27;] · done 0/1 · 244¢</td></tr>
+<tr><td>62</td><td class="mono">11:29:27</td><td>Jordan</td><td>Profiles &amp; configuration: per-app detection,</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 11¢</td></tr>
+<tr><td>63</td><td class="mono">11:30:19</td><td>Devon</td><td>Identify and correct the working directory/w</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 128¢</td></tr>
+<tr><td>64</td><td class="mono">11:37:28</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill failed">failed</span></td><td class="outcome">{&quot;cap&quot;: 3, &quot;iteration&quot;: 4, &quot;done_children&quot;: 0, &quot;contract_task_id&quot;: &quot;01</td></tr>
+<tr><td>65</td><td class="mono">11:37:28</td><td>Ava</td><td>Measurement loop: telemetry dashboard + rele</td><td><span class="pill failed">failed</span></td><td class="outcome">{&quot;cap&quot;: 3, &quot;iteration&quot;: 4, &quot;done_children&quot;: 0, &quot;contract_task_id&quot;: &quot;01</td></tr>
+<tr><td>66</td><td class="mono">12:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 37¢</td></tr>
+<tr><td>67</td><td class="mono">12:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 37¢</td></tr>
+<tr><td>68</td><td class="mono">12:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 37¢</td></tr>
+<tr><td>69</td><td class="mono">12:00:00</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill failed">failed</span></td><td class="outcome">[&#x27;fail&#x27;] · done 0/1 · 37¢</td></tr>
+<tr><td>70</td><td class="mono">12:01:53</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 42¢</td></tr>
+<tr><td>71</td><td class="mono">12:01:53</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 42¢</td></tr>
+<tr><td>72</td><td class="mono">12:01:53</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 42¢</td></tr>
+<tr><td>73</td><td class="mono">12:01:53</td><td>Casey</td><td>Executive review: your evidence base is `com</td><td><span class="pill succeeded">succeeded</span></td><td class="outcome">[&#x27;pass&#x27;] · done 1/1 · 42¢</td></tr>
+</table></div>
+<h2 class="sec">Decisions &amp; executive directives</h2>
+<div class="card">
+<div class="node"><span class="t">build a cursor type product for video editors</span><span class="pill info">active</span><span class="outcome" style="margin-left:auto">founder objective</span></div>
+<p class="who" style="margin:8px 0 0">Founder objective — the company&#x27;s root goal (chorus-owned).</p>
+<p class="outcome" style="margin:6px 0 0">drives 1 goal(s)</p>
+</div>
+<div class="card">
+<div class="node"><span class="t">Ship an MVP “precision cursor overlay” desktop app for video editors that proves latency/stability and validates workflow value through measured editor trials.</span><span class="pill info">proposed</span><span class="outcome" style="margin-left:auto">Casey</span></div>
+<p class="who" style="margin:8px 0 0">The reality digest contains one active goal: build a cursor-type product for video editors (dec-d201b00f-3a7a-4933-88a2-99b839fdce3a). With current capacity only the CEO, we proposed a single cross-functional pod (PM lead + designer + FE + BE + analyst) to deliver an end-to-end MVP. The roadmap is sized to this pod: first establish the technical foundation (global input capture + overlay rendering with performance instrumentation), then deliver editor-oriented cursor modes and profiles, then add measurement + usability validation to decide whether to deepen integrations.</p>
+<p class="outcome" style="margin:6px 0 0">drives 4 goal(s)</p>
+</div>
+<div class="card">
+<div class="node"><span class="t">Ship an MVP “precision cursor overlay” desktop app for video editors that proves latency/stability and validates workflow value through measured editor trials.</span><span class="pill info">proposed</span><span class="outcome" style="margin-left:auto">Casey</span></div>
+<p class="who" style="margin:8px 0 0">Governance digest shows the MVP decision already exists (dec_86528b8d3a99) with 4 outcome goals around low-latency overlay, editor modes, measurement loop, and profiles/settings. With one proposed cross-functional pod (PM lead + designer + FE + BE + analyst), we should keep the roadmap small and focused on proving the core technical claim (&lt;=16ms p95 overlay latency with 99% crash-free sessions) and validating workflow value through a modest 10-editor trial before deeper integrations.</p>
+<p class="outcome" style="margin:6px 0 0">drives 4 goal(s)</p>
+</div>
+<h2 class="sec">Approvals — workforce plans</h2>
+<div class="legend">Each plan revision is a hiring proposal the operator auto-approved to grow the org.</div>
+<div class="card"><table><tr><th>Plan</th><th>Rev</th><th>Status</th><th>Hires</th><th>Lead grants</th><th>Rationale</th></tr>
+<tr><td class="mono">019f895a</td><td>1</td><td><span class="pill applied">applied</span></td><td>5</td><td>2</td><td class="outcome">Reality digest shows a single active decision/goal: “build a cursor type product for video editors” (dec-d201b00f-3a7a-4</td></tr>
+<tr><td class="mono">019f895c</td><td>1</td><td><span class="pill applied">applied</span></td><td>5</td><td>2</td><td class="outcome">Sprint 2 correction: keep the previously proposed single cross-functional delivery pod for the Cursor MVP, but ensure (1</td></tr>
+<tr><td class="mono">019f8980</td><td>1</td><td><span class="pill applied">applied</span></td><td>2</td><td>0</td><td class="outcome">company_state.json shows active product work is blocked at the goal-task level for both MVP overlay and editor modes (ta</td></tr>
+<tr><td class="mono">019f89b5</td><td>1</td><td><span class="pill applied">applied</span></td><td>1</td><td>0</td><td class="outcome">company_state.json shows blocked work on Measurement loop (task 019f8983-9afe-7a77-8490-80069fa052ef, assignee Ava, stat</td></tr>
+</table></div>
+<div class="card"><table><tr><th>Subject</th><th>Gate</th><th>Action</th><th>Status</th><th>When</th></tr>
+<tr><td>task</td><td>acceptance</td><td>task_gate</td><td><span class="pill pending">pending</span></td><td class="mono">10:30:40</td></tr>
+</table></div>
+<h2 class="sec">Main branch — the integrated product</h2>
+<div class="legend">Each employee works on its own <code>chorus/&lt;name&gt;</code> branch in an isolated git worktree, then the engine merges each branch into <code>main</code>. This is why files look "repeated" across worktrees — they are per-person copies of the same tree; the single source of truth is <code>main</code> below.</div>
+<div class="card"><div class="grpname">Merge history on main (most recent first)</div>
+<table>
+<tr><td class="mono">0bb0093</td><td>Implement Windows global pointer capture (works unfocused), low-latency cursor overlay render loop,</td></tr>
+<tr><td class="mono">7444e05</td><td>Implement Windows global pointer capture (works unfocused), low-latency cursor overlay render loop,</td></tr>
+<tr><td class="mono">2a085bd</td><td>Implement Windows app loop providing global input capture while unfocused, always-on-top cursor over</td></tr>
+<tr><td class="mono">87a4416</td><td>Implement Windows app loop providing global input capture while unfocused, always-on-top cursor over</td></tr>
+<tr><td class="mono">665deed</td><td>chorus: company root</td></tr>
+</table></div>
+<h2 class="sec">Files generated</h2>
+<div class="legend">The integrated product on <code>main</code> after every employee branch was merged — each file shown ONCE (no per-worktree duplication). The chips name the employee(s) who created or edited each file (by presence in their worktree; a file can have several). Click to expand.</div>
+<div class="grpname">main (merged, integrated product) — 35 files</div>
+<details class="art"><summary>
+native/WinHookOverlay/bin/Release/net9.0-windows/win-hook-overlay.deps.json<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">23 lines</span></summary>
+<pre>{
+  &quot;runtimeTarget&quot;: {
+    &quot;name&quot;: &quot;.NETCoreApp,Version=v9.0&quot;,
+    &quot;signature&quot;: &quot;&quot;
+  },
+  &quot;compilationOptions&quot;: {},
+  &quot;targets&quot;: {
+    &quot;.NETCoreApp,Version=v9.0&quot;: {
+      &quot;win-hook-overlay/1.0.0&quot;: {
+        &quot;runtime&quot;: {
+          &quot;win-hook-overlay.dll&quot;: {}
+        }
+      }
+    }
+  },
+  &quot;libraries&quot;: {
+    &quot;win-hook-overlay/1.0.0&quot;: {
+      &quot;type&quot;: &quot;project&quot;,
+      &quot;serviceable&quot;: false,
+      &quot;sha512&quot;: &quot;&quot;
+    }
+  }
+}</pre></details>
+<details class="art"><summary>
+native/WinHookOverlay/bin/Release/net9.0-windows/win-hook-overlay.runtimeconfig.json<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">20 lines</span></summary>
+<pre>{
+  &quot;runtimeOptions&quot;: {
+    &quot;tfm&quot;: &quot;net9.0&quot;,
+    &quot;frameworks&quot;: [
+      {
+        &quot;name&quot;: &quot;Microsoft.NETCore.App&quot;,
+        &quot;version&quot;: &quot;9.0.0&quot;
+      },
+      {
+        &quot;name&quot;: &quot;Microsoft.WindowsDesktop.App&quot;,
+        &quot;version&quot;: &quot;9.0.0&quot;
+      }
+    ],
+    &quot;configProperties&quot;: {
+      &quot;System.Reflection.Metadata.MetadataUpdater.IsSupported&quot;: false,
+      &quot;System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization&quot;: false,
+      &quot;CSWINRT_USE_WINDOWS_UI_XAML_PROJECTIONS&quot;: false
+    }
+  }
+}</pre></details>
+<details class="art"><summary>
+native/WinHookOverlay/obj/project.assets.json<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">83 lines</span></summary>
+<pre>{
+  &quot;version&quot;: 3,
+  &quot;targets&quot;: {
+    &quot;net9.0-windows7.0&quot;: {}
+  },
+  &quot;libraries&quot;: {},
+  &quot;projectFileDependencyGroups&quot;: {
+    &quot;net9.0-windows7.0&quot;: []
+  },
+  &quot;packageFolders&quot;: {
+    &quot;Q:\\.tools\\.nuget\\packages\\&quot;: {},
+    &quot;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages&quot;: {}
+  },
+  &quot;project&quot;: {
+    &quot;version&quot;: &quot;1.0.0&quot;,
+    &quot;restore&quot;: {
+      &quot;projectUniqueName&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;,
+      &quot;projectName&quot;: &quot;win-hook-overlay&quot;,
+      &quot;projectPath&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;,
+      &quot;packagesPath&quot;: &quot;Q:\\.tools\\.nuget\\packages\\&quot;,
+      &quot;outputPath&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\obj\\&quot;,
+      &quot;projectStyle&quot;: &quot;PackageReference&quot;,
+      &quot;fallbackFolders&quot;: [
+        &quot;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages&quot;
+      ],
+      &quot;configFilePaths&quot;: [
+        &quot;C:\\Users\\prgulati\\AppData\\Roaming\\NuGet\\NuGet.Config&quot;,
+        &quot;C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config&quot;,
+        &quot;C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config&quot;
+      ],
+      &quot;originalTargetFrameworks&quot;: [
+        &quot;net9.0-windows&quot;
+      ],
+      &quot;sources&quot;: {
+        &quot;C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\&quot;: {},
+        &quot;C:\\Program Files\\dotnet\\library-packs&quot;: {},
+        &quot;https://api.nuget.org/v3/index.json&quot;: {}
+      },
+      &quot;frameworks&quot;: {
+        &quot;net9.0-windows7.0&quot;: {
+          &quot;targetAlias&quot;: &quot;net9.0-windows&quot;,
+          &quot;projectReferences&quot;: {}
+        }
+      },
+      &quot;warningProperties&quot;: {
+        &quot;warnAsError&quot;: [
+          &quot;NU1605&quot;
+        ]
+      },
+      &quot;restoreAuditProperties&quot;: {
+        &quot;enableAudit&quot;: &quot;true&quot;,
+        &quot;auditLevel&quot;: &quot;low&quot;,
+        &quot;auditMode&quot;: &quot;direct&quot;
+      },
+      &quot;SdkAnalysisLevel&quot;: &quot;9.0.300&quot;
+    },
+    &quot;frameworks&quot;: {
+      &quot;net9.0-windows7.0&quot;: {
+        &quot;targetAlias&quot;: &quot;net9.0-windows&quot;,
+        &quot;imports&quot;: [
+          &quot;net461&quot;,
+          &quot;net462&quot;,
+          &quot;net47&quot;,
+          &quot;net471&quot;,
+          &quot;net472&quot;,
+          &quot;net48&quot;,
+          &quot;net481&quot;
+        ],
+        &quot;assetTargetFallback&quot;: true,
+        &quot;warn&quot;: true,
+        &quot;frameworkReferences&quot;: {
+          &quot;Microsoft.NETCore.App&quot;: {
+            &quot;privateAssets&quot;: &quot;all&quot;
+          },
+          &quot;Microsoft.WindowsDesktop.App.WindowsForms&quot;: {
+            &quot;privateAssets&quot;: &quot;none&quot;
+          }
+        },
+        &quot;runtimeIdentifierGraphPath&quot;: &quot;C:\\Program Files\\dotnet\\sdk\\9.0.316/PortableRuntimeIdentifierGraph.json&quot;
+      }
+    }
+  }
+}</pre></details>
+<details class="art"><summary>
+native/WinHookOverlay/obj/Release/net9.0-windows/WinHookOverlay.csproj.FileListAbsolute.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">28 lines</span></summary>
+<pre>q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.GeneratedMSBuildEditorConfig.editorconfig
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.AssemblyInfoInputs.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.AssemblyInfo.cs
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.csproj.CoreCompileInputs.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.exe
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.deps.json
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.runtimeconfig.json
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.pdb
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\refint\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\win-hook-overlay.pdb
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.genruntimeconfig.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\obj\Release\net9.0-windows\ref\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.GeneratedMSBuildEditorConfig.editorconfig
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.AssemblyInfoInputs.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.AssemblyInfo.cs
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.csproj.CoreCompileInputs.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\refint\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\win-hook-overlay.pdb
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.exe
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.deps.json
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.runtimeconfig.json
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.dll
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.pdb
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\WinHookOverlay.genruntimeconfig.cache
+q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\obj\Release\net9.0-windows\ref\win-hook-overlay.dll</pre></details>
+<details class="art"><summary>
+native/WinHookOverlay/obj/WinHookOverlay.csproj.nuget.dgspec.json<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">77 lines</span></summary>
+<pre>{
+  &quot;format&quot;: 1,
+  &quot;restore&quot;: {
+    &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;: {}
+  },
+  &quot;projects&quot;: {
+    &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;: {
+      &quot;version&quot;: &quot;1.0.0&quot;,
+      &quot;restore&quot;: {
+        &quot;projectUniqueName&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;,
+        &quot;projectName&quot;: &quot;win-hook-overlay&quot;,
+        &quot;projectPath&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\WinHookOverlay.csproj&quot;,
+        &quot;packagesPath&quot;: &quot;Q:\\.tools\\.nuget\\packages\\&quot;,
+        &quot;outputPath&quot;: &quot;q:\\projects\\inspired-arc\\podium\\.podium\\workdir\\019f8959-9276-73b6-8ce0-71797de18b07\\work\\019f8959-9276-73b6-8ce0-71797de18b07\\repo\\native\\WinHookOverlay\\obj\\&quot;,
+        &quot;projectStyle&quot;: &quot;PackageReference&quot;,
+        &quot;fallbackFolders&quot;: [
+          &quot;C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages&quot;
+        ],
+        &quot;configFilePaths&quot;: [
+          &quot;C:\\Users\\prgulati\\AppData\\Roaming\\NuGet\\NuGet.Config&quot;,
+          &quot;C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config&quot;,
+          &quot;C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config&quot;
+        ],
+        &quot;originalTargetFrameworks&quot;: [
+          &quot;net9.0-windows&quot;
+        ],
+        &quot;sources&quot;: {
+          &quot;C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\&quot;: {},
+          &quot;C:\\Program Files\\dotnet\\library-packs&quot;: {},
+          &quot;https://api.nuget.org/v3/index.json&quot;: {}
+        },
+        &quot;frameworks&quot;: {
+          &quot;net9.0-windows7.0&quot;: {
+            &quot;targetAlias&quot;: &quot;net9.0-windows&quot;,
+            &quot;projectReferences&quot;: {}
+          }
+        },
+        &quot;warningProperties&quot;: {
+          &quot;warnAsError&quot;: [
+            &quot;NU1605&quot;
+          ]
+        },
+        &quot;restoreAuditProperties&quot;: {
+          &quot;enableAudit&quot;: &quot;true&quot;,
+          &quot;auditLevel&quot;: &quot;low&quot;,
+          &quot;auditMode&quot;: &quot;direct&quot;
+        },
+        &quot;SdkAnalysisLevel&quot;: &quot;9.0.300&quot;
+      },
+      &quot;frameworks&quot;: {
+        &quot;net9.0-windows7.0&quot;: {
+          &quot;targetAlias&quot;: &quot;net9.0-windows&quot;,
+          &quot;imports&quot;: [
+            &quot;net461&quot;,
+            &quot;net462&quot;,
+            &quot;net47&quot;,
+            &quot;net471&quot;,
+            &quot;net472&quot;,
+            &quot;net48&quot;,
+            &quot;net481&quot;
+          ],
+          &quot;assetTargetFallback&quot;: true,
+          &quot;warn&quot;: true,
+          &quot;frameworkReferences&quot;: {
+            &quot;Microsoft.NETCore.App&quot;: {
+              &quot;privateAssets&quot;: &quot;all&quot;
+            },
+            &quot;Microsoft.WindowsDesktop.App.WindowsForms&quot;: {
+              &quot;privateAssets&quot;: &quot;none&quot;
+            }
+          },
+          &quot;runtimeIdentifierGraphPath&quot;: &quot;C:\\Program Files\\dotnet\\sdk\\9.0.316/PortableRuntimeIdentifierGraph.json&quot;
+        }
+      }
+    }
+  }
+}</pre></details>
+<details class="art"><summary>
+package.json<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">20 lines</span></summary>
+<pre>{
+  &quot;name&quot;: &quot;win-global-input-overlay&quot;,
+  &quot;private&quot;: true,
+  &quot;type&quot;: &quot;module&quot;,
+  &quot;version&quot;: &quot;0.0.0&quot;,
+  &quot;description&quot;: &quot;Windows global input capture + always-on-top overlay loop with instrumentation&quot;,
+  &quot;devDependencies&quot;: {
+    &quot;@playwright/test&quot;: &quot;^1.55.0&quot;
+  },
+  &quot;scripts&quot;: {
+    &quot;test&quot;: &quot;node --test&quot;,
+    &quot;e2e&quot;: &quot;playwright test&quot;,
+    &quot;build:win&quot;: &quot;node scripts/build-win-exe.mjs&quot;,
+    &quot;win:smoke&quot;: &quot;node scripts/win-smoke.mjs&quot;,
+    &quot;bench&quot;: &quot;node scripts/bench.mjs&quot;,
+    &quot;stability&quot;: &quot;node scripts/stability.mjs&quot;,
+    &quot;verify:win&quot;: &quot;npm run build:win &amp;&amp; npm test &amp;&amp; npm run e2e&quot;,
+    &quot;qa&quot;: &quot;npm run build:win &amp;&amp; npm test &amp;&amp; npm run e2e &amp;&amp; npm run bench &amp;&amp; npm run stability&quot;
+  }
+}</pre></details>
+<details class="art"><summary>
+playwright.config.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">10 lines</span></summary>
+<pre>import { defineConfig } from &#x27;@playwright/test&#x27;;
+
+export default defineConfig({
+  testDir: &#x27;./tests-e2e&#x27;,
+  timeout: 30_000,
+  reporter: [[&#x27;list&#x27;]],
+  use: {
+    headless: true
+  }
+});</pre></details>
+<details class="art"><summary>
+scripts/bench.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">58 lines</span></summary>
+<pre>import { spawnSync } from &#x27;node:child_process&#x27;;
+import { getExePath } from &#x27;./run-win-exe.mjs&#x27;;
+
+function parseJsonl(text) {
+  return text
+    .split(/\r?\n/)
+    .map((l) =&gt; l.trim())
+    .filter(Boolean)
+    .map((l) =&gt; JSON.parse(l));
+}
+
+if (process.platform !== &#x27;win32&#x27;) {
+  console.log(JSON.stringify({ bench: { skipped: true, reason: &#x27;non-win32&#x27; } }));
+  process.exit(0);
+}
+
+// Benchmark hook: collect input-&gt;present latency samples from the timestamped event stream.
+// Invoked in CI as `npm run bench`.
+
+const durationMs = Number(process.env.BENCH_MS ?? 2000);
+const exe = getExePath();
+
+const r = spawnSync(exe, [&#x27;--duration-ms&#x27;, String(durationMs), &#x27;--jsonl-stdout&#x27;, &#x27;--inject-moves&#x27;], {
+  stdio: [&#x27;ignore&#x27;, &#x27;pipe&#x27;, &#x27;pipe&#x27;],
+  env: { ...process.env }
+});
+
+const out = r.stdout.toString(&#x27;utf8&#x27;);
+const evs = parseJsonl(out);
+
+const presents = evs.filter((e) =&gt; e.kind === &#x27;present&#x27; &amp;&amp; typeof e.tInput === &#x27;number&#x27; &amp;&amp; typeof e.tPresent === &#x27;number&#x27;);
+const lat = presents
+  .map((p) =&gt; p.tPresent - p.tInput)
+  .filter((d) =&gt; Number.isFinite(d) &amp;&amp; d &gt;= 0 &amp;&amp; d &lt; 1_000_000_000); // guard against mismatched first-frame
+
+lat.sort((a, b) =&gt; a - b);
+
+function pct(p) {
+  if (lat.length === 0) return null;
+  const idx = Math.min(lat.length - 1, Math.floor(p * (lat.length - 1)));
+  return lat[idx];
+}
+
+const result = {
+  bench: {
+    durationMs,
+    samples: lat.length,
+    tickDelta: {
+      min: lat[0] ?? null,
+      p50: pct(0.5),
+      p95: pct(0.95),
+      max: lat[lat.length - 1] ?? null
+    }
+  }
+};
+
+console.log(JSON.stringify(result));
+process.exit(r.status ?? 1);</pre></details>
+<details class="art"><summary>
+scripts/build-win-exe.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">12 lines</span></summary>
+<pre>import { spawnSync } from &#x27;node:child_process&#x27;;
+import { resolve } from &#x27;node:path&#x27;;
+
+if (process.platform !== &#x27;win32&#x27;) {
+  console.log(&#x27;build-win-exe: skipped (non-win32)&#x27;);
+  process.exit(0);
+}
+
+const proj = resolve(&#x27;native/WinHookOverlay/WinHookOverlay.csproj&#x27;);
+const args = [&#x27;build&#x27;, proj, &#x27;-c&#x27;, &#x27;Release&#x27;];
+const r = spawnSync(&#x27;dotnet&#x27;, args, { stdio: &#x27;inherit&#x27; });
+process.exit(r.status ?? 1);</pre></details>
+<details class="art"><summary>
+scripts/e2e-smoke.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">18 lines</span></summary>
+<pre>// E2E smoke for the DoD harness: run the in-process benchmark + stability once.
+// This is not a browser UI; we still use the &quot;e2e&quot; slot to prove the full flow works.
+import { spawn } from &#x27;node:child_process&#x27;;
+
+function run(cmd, args) {
+  return new Promise((resolve, reject) =&gt; {
+    const child = spawn(cmd, args, { stdio: &#x27;inherit&#x27;, shell: false });
+    child.on(&#x27;exit&#x27;, (code) =&gt; {
+      if (code === 0) resolve();
+      else reject(new Error(`${cmd} ${args.join(&#x27; &#x27;)} exited with ${code}`));
+    });
+    child.on(&#x27;error&#x27;, reject);
+  });
+}
+
+await run(process.execPath, [&#x27;scripts/bench.mjs&#x27;]);
+await run(process.execPath, [&#x27;scripts/stability.mjs&#x27;]);
+console.log(&#x27;e2e smoke: ok&#x27;);</pre></details>
+<details class="art"><summary>
+scripts/run-win-exe.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">17 lines</span></summary>
+<pre>import { spawn } from &#x27;node:child_process&#x27;;
+import { resolve } from &#x27;node:path&#x27;;
+
+export function getExePath() {
+  const base = resolve(&#x27;native/WinHookOverlay/bin/Release/net9.0-windows&#x27;);
+  return resolve(base, &#x27;win-hook-overlay.exe&#x27;);
+}
+
+export function runWinHookOverlay({ durationMs = 1000, extraArgs = [], env = {} } = {}) {
+  const exe = getExePath();
+  const args = [&#x27;--duration-ms&#x27;, String(durationMs), &#x27;--jsonl-stdout&#x27;, ...extraArgs];
+  const child = spawn(exe, args, {
+    stdio: [&#x27;ignore&#x27;, &#x27;pipe&#x27;, &#x27;pipe&#x27;],
+    env: { ...process.env, ...env }
+  });
+  return child;
+}</pre></details>
+<details class="art"><summary>
+scripts/stability.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">26 lines</span></summary>
+<pre>import { spawnSync } from &#x27;node:child_process&#x27;;
+import { getExePath } from &#x27;./run-win-exe.mjs&#x27;;
+
+if (process.platform !== &#x27;win32&#x27;) {
+  console.log(JSON.stringify({ stability: { skipped: true, reason: &#x27;non-win32&#x27; } }));
+  process.exit(0);
+}
+
+const exe = getExePath();
+const runs = Number(process.env.STABILITY_RUNS ?? 20);
+const durationMs = Number(process.env.STABILITY_MS ?? 250);
+
+let ok = 0;
+let fail = 0;
+
+for (let i = 0; i &lt; runs; i++) {
+  const r = spawnSync(exe, [&#x27;--duration-ms&#x27;, String(durationMs), &#x27;--jsonl-stdout&#x27;], {
+    stdio: [&#x27;ignore&#x27;, &#x27;pipe&#x27;, &#x27;pipe&#x27;],
+    env: { ...process.env }
+  });
+  if (r.status === 0) ok++;
+  else fail++;
+}
+
+console.log(JSON.stringify({ stability: { runs, durationMs, ok, fail } }));
+process.exit(fail === 0 ? 0 : 1);</pre></details>
+<details class="art"><summary>
+scripts/win-smoke.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">21 lines</span></summary>
+<pre>import { spawnSync } from &#x27;node:child_process&#x27;;
+import { getExePath } from &#x27;./run-win-exe.mjs&#x27;;
+
+if (process.platform !== &#x27;win32&#x27;) {
+  console.log(&#x27;win-smoke: skipped (non-win32)&#x27;);
+  process.exit(0);
+}
+
+const durationMs = Number(process.env.SMOKE_MS ?? 1500);
+console.log(`win-smoke: starting exe for ${durationMs}ms (move mouse; Ctrl+Shift+O toggles mode)`);
+
+const exe = getExePath();
+const r = spawnSync(exe, [&#x27;--duration-ms&#x27;, String(durationMs), &#x27;--jsonl-stdout&#x27;], {
+  env: { ...process.env },
+  stdio: [&#x27;ignore&#x27;, &#x27;pipe&#x27;, &#x27;pipe&#x27;]
+});
+
+process.stdout.write(r.stdout.toString(&#x27;utf8&#x27;));
+process.stderr.write(r.stderr.toString(&#x27;utf8&#x27;));
+
+if (r.status !== 0) process.exit(r.status ?? 1);</pre></details>
+<details class="art"><summary>
+src/appLoop.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">99 lines</span></summary>
+<pre>import { Modes, toggleMode } from &#x27;./mode.mjs&#x27;;
+
+/**
+ * Minimal in-process loop model:
+ * - input events coalesce into a &quot;latest pointer state&quot;
+ * - scheduling is event-driven (no fixed sleeps in the hot path)
+ * - overlay update/present is abstracted for real Windows overlay vs synthetic harness
+ */
+export class AppLoop {
+  /**
+   * @param {{
+   *  overlay: { start:()=&gt;Promise&lt;void&gt;|void, stop:()=&gt;Promise&lt;void&gt;|void, present:(state:any)=&gt;Promise&lt;void&gt;|void },
+   *  input: { start:()=&gt;Promise&lt;void&gt;|void, stop:()=&gt;Promise&lt;void&gt;|void, onPointer:(cb:(ev:any)=&gt;void)=&gt;void, onToggleMode?:(cb:()=&gt;void)=&gt;void },
+   *  instrumentation: { nowTicks: ()=&gt;bigint, onInput:(ev:any)=&gt;void, onPresent:(ev:any)=&gt;void }
+   * }} deps
+   */
+  constructor({ overlay, input, instrumentation }) {
+    this.overlay = overlay;
+    this.input = input;
+    this.ins = instrumentation;
+
+    this._running = false;
+    this._scheduled = false;
+
+    this.state = {
+      mode: Modes.Normal,
+      x: 0,
+      y: 0,
+      lastInputTicks: 0n,
+      lastPresentTicks: 0n
+    };
+
+    this.input.onPointer((ev) =&gt; this._handlePointer(ev));
+    if (this.input.onToggleMode) {
+      this.input.onToggleMode(() =&gt; this._handleToggleMode());
+    }
+  }
+
+  async start() {
+    if (this._running) return;
+    this._running = true;
+    await this.overlay.start();
+    await this.input.start();
+  }
+
+  async stop() {
+    if (!this._running) return;
+    this._running = false;
+    // stop input first so no further scheduling
+    await this.input.stop();
+    await this.overlay.stop();
+  }
+
+  _handleToggleMode() {
+    if (!this._running) return;
+    this.state.mode = toggleMode(this.state.mode);
+    // force a present so mode visibly updates even without movement
+    this._schedulePresent();
+  }
+
+  _handlePointer(ev) {
+    if (!this._running) return;
+    const tInput = this.ins.nowTicks();
+    this.state.x = ev.x;
+    this.state.y = ev.y;
+    this.state.lastInputTicks = tInput;
+    this.ins.onInput({ tInput, x: ev.x, y: ev.y, mode: this.state.mode });
+    this._schedulePresent();
+  }
+
+  _schedulePresent() {
+    if (this._scheduled) return;
+    this._scheduled = true;
+    queueMicrotask(() =&gt; {
+      this._scheduled = false;
+      if (!this._running) return;
+      this._presentLatest();
+    });
+  }
+
+  async _presentLatest() {
+    const tPresent = this.ins.nowTicks();
+    this.state.lastPresentTicks = tPresent;
+    await this.overlay.present({
+      x: this.state.x,
+      y: this.state.y,
+      mode: this.state.mode,
+      tInput: this.state.lastInputTicks,
+      tPresent
+    });
+    this.ins.onPresent({
+      tInput: this.state.lastInputTicks,
+      tPresent,
+      x: this.state.x,
+      y: this.state.y,
+      mode: this.state.mode
+    });
+  }
+}</pre></details>
+<details class="art"><summary>
+src/instrumentation.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">49 lines</span></summary>
+<pre>import { nowTicks as defaultNowTicks } from &#x27;./time.mjs&#x27;;
+
+export class InstrumentationRingBuffer {
+  constructor(capacity = 4096) {
+    if (!Number.isInteger(capacity) || capacity &lt;= 0) {
+      throw new Error(&#x27;capacity must be a positive integer&#x27;);
+    }
+    this.capacity = capacity;
+    this._buf = new Array(capacity);
+    this._writeIndex = 0;
+    this._count = 0;
+  }
+
+  record(ev) {
+    // ev shape: { kind, tInput?, tPresent?, x?, y?, mode? }
+    this._buf[this._writeIndex] = ev;
+    this._writeIndex = (this._writeIndex + 1) % this.capacity;
+    this._count = Math.min(this.capacity, this._count + 1);
+  }
+
+  snapshot() {
+    const out = [];
+    const start = (this._writeIndex - this._count + this.capacity) % this.capacity;
+    for (let i = 0; i &lt; this._count; i++) {
+      out.push(this._buf[(start + i) % this.capacity]);
+    }
+    return out;
+  }
+
+  clear() {
+    this._writeIndex = 0;
+    this._count = 0;
+    this._buf = new Array(this.capacity);
+  }
+}
+
+export function createInstrumentation({ capacity = 4096, nowTicks = defaultNowTicks } = {}) {
+  const ring = new InstrumentationRingBuffer(capacity);
+  return {
+    ring,
+    nowTicks,
+    onInput(ev) {
+      ring.record({ kind: &#x27;input&#x27;, ...ev });
+    },
+    onPresent(ev) {
+      ring.record({ kind: &#x27;present&#x27;, ...ev });
+    }
+  };
+}</pre></details>
+<details class="art"><summary>
+src/mode.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">8 lines</span></summary>
+<pre>export const Modes = /** @type {const} */ ({
+  Normal: &#x27;normal&#x27;,
+  Highlight: &#x27;highlight&#x27;
+});
+
+export function toggleMode(mode) {
+  return mode === Modes.Normal ? Modes.Highlight : Modes.Normal;
+}</pre></details>
+<details class="art"><summary>
+src/stats.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">22 lines</span></summary>
+<pre>export function percentile(sorted, p) {
+  if (sorted.length === 0) return null;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx];
+}
+
+export function summarizeMs(samplesMs) {
+  const sorted = [...samplesMs].sort((a, b) =&gt; a - b);
+  const n = sorted.length;
+  if (n === 0) {
+    return { n: 0, min: null, max: null, mean: null, p50: null, p95: null };
+  }
+  const mean = sorted.reduce((a, b) =&gt; a + b, 0) / n;
+  return {
+    n,
+    min: sorted[0],
+    max: sorted[n - 1],
+    mean,
+    p50: percentile(sorted, 50),
+    p95: percentile(sorted, 95)
+  };
+}</pre></details>
+<details class="art"><summary>
+src/syntheticInput.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">33 lines</span></summary>
+<pre>export class SyntheticInput {
+  constructor() {
+    this._pointerHandlers = new Set();
+    this._toggleHandlers = new Set();
+    this._running = false;
+  }
+
+  onPointer(cb) {
+    this._pointerHandlers.add(cb);
+  }
+
+  onToggleMode(cb) {
+    this._toggleHandlers.add(cb);
+  }
+
+  async start() {
+    this._running = true;
+  }
+
+  async stop() {
+    this._running = false;
+  }
+
+  emitPointer({ x, y }) {
+    if (!this._running) return;
+    for (const cb of this._pointerHandlers) cb({ x, y });
+  }
+
+  emitToggleMode() {
+    if (!this._running) return;
+    for (const cb of this._toggleHandlers) cb();
+  }
+}</pre></details>
+<details class="art"><summary>
+src/syntheticOverlay.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">21 lines</span></summary>
+<pre>export class SyntheticOverlay {
+  constructor() {
+    this._running = false;
+    this.presentCount = 0;
+    this.lastFrame = null;
+  }
+
+  async start() {
+    this._running = true;
+  }
+
+  async stop() {
+    this._running = false;
+  }
+
+  async present(frame) {
+    if (!this._running) return;
+    this.presentCount++;
+    this.lastFrame = frame;
+  }
+}</pre></details>
+<details class="art"><summary>
+src/time.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">9 lines</span></summary>
+<pre>export function nowTicks() {
+  // Monotonic-ish timestamp for in-process latency measurement.
+  // Node&#x27;s high-resolution timer is monotonic.
+  return process.hrtime.bigint();
+}
+
+export function ticksToMs(ticks) {
+  return Number(ticks) / 1_000_000;
+}</pre></details>
+<details class="art"><summary>
+src/win/timePerf.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">7 lines</span></summary>
+<pre>import { performance } from &#x27;node:perf_hooks&#x27;;
+
+// tInput/tPresent tick source for Windows path too.
+export function nowTicks() {
+  // bigint nanoseconds.
+  return BigInt(Math.floor(performance.now() * 1e6));
+}</pre></details>
+<details class="art"><summary>
+src/win/winGlobalMouseHook.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">89 lines</span></summary>
+<pre>import ffi from &#x27;node:ffi-napi&#x27;;
+import ref from &#x27;node:ref-napi&#x27;;
+import StructType from &#x27;ref-struct-napi&#x27;;
+
+// NOTE: This module uses Win32 low-level mouse hook (WH_MOUSE_LL).
+// It is Windows-only and loaded by src/win/winRuntime.mjs.
+
+const voidPtr = ref.refType(ref.types.void);
+const longPtr = ref.refType(ref.types.long);
+
+const POINT = StructType({
+  x: ref.types.long,
+  y: ref.types.long
+});
+
+// https://learn.microsoft.com/windows/win32/api/winuser/ns-winuser-msllhookstruct
+const MSLLHOOKSTRUCT = StructType({
+  pt: POINT,
+  mouseData: ref.types.uint32,
+  flags: ref.types.uint32,
+  time: ref.types.uint32,
+  dwExtraInfo: voidPtr
+});
+
+const user32 = ffi.Library(&#x27;user32&#x27;, {
+  SetWindowsHookExW: [voidPtr, [&#x27;int&#x27;, voidPtr, voidPtr, &#x27;uint32&#x27;]],
+  CallNextHookEx: [&#x27;int&#x27;, [voidPtr, &#x27;int&#x27;, &#x27;uint32&#x27;, voidPtr]],
+  UnhookWindowsHookEx: [&#x27;bool&#x27;, [voidPtr]],
+  PostThreadMessageW: [&#x27;bool&#x27;, [&#x27;uint32&#x27;, &#x27;uint32&#x27;, &#x27;uint32&#x27;, &#x27;int32&#x27;]],
+  GetCurrentThreadId: [&#x27;uint32&#x27;, []]
+});
+
+export const WM_APP_POINTER = 0x8000 + 1;
+export const WM_APP_TOGGLE_MODE = 0x8000 + 2;
+
+const WH_MOUSE_LL = 14;
+const WM_MOUSEMOVE = 0x0200;
+
+export class WinGlobalMouseHook {
+  /**
+   * @param {{ postThreadMessage:(msg:number,wParam:number,lParam:number)=&gt;void }} deps
+   */
+  constructor({ postThreadMessage }) {
+    this._postThreadMessage = postThreadMessage;
+    this._hookHandle = null;
+    this._callback = null;
+    this._threadId = 0;
+  }
+
+  start() {
+    if (process.platform !== &#x27;win32&#x27;) {
+      throw new Error(&#x27;WinGlobalMouseHook is Windows-only&#x27;);
+    }
+    if (this._hookHandle) return;
+
+    this._threadId = user32.GetCurrentThreadId();
+
+    this._callback = ffi.Callback(&#x27;int&#x27;, [&#x27;int&#x27;, &#x27;uint32&#x27;, voidPtr], (nCode, wParam, lParam) =&gt; {
+      try {
+        if (nCode &gt;= 0 &amp;&amp; wParam === WM_MOUSEMOVE) {
+          const hs = ref.get(lParam, 0, MSLLHOOKSTRUCT);
+          const x = hs.pt.x | 0;
+          const y = hs.pt.y | 0;
+          // Post message to our message loop thread.
+          // wParam = x, lParam = y (both 32-bit signed)
+          user32.PostThreadMessageW(this._threadId, WM_APP_POINTER, x &gt;&gt;&gt; 0, y);
+        }
+      } catch {
+        // swallow
+      }
+      return user32.CallNextHookEx(ref.NULL, nCode, wParam, lParam);
+    });
+
+    // hMod = NULL works for WH_MOUSE_LL in our own process.
+    this._hookHandle = user32.SetWindowsHookExW(WH_MOUSE_LL, this._callback, ref.NULL, 0);
+    if (ref.isNull(this._hookHandle)) {
+      this._hookHandle = null;
+      this._callback = null;
+      throw new Error(&#x27;SetWindowsHookExW failed&#x27;);
+    }
+  }
+
+  stop() {
+    if (!this._hookHandle) return;
+    user32.UnhookWindowsHookEx(this._hookHandle);
+    this._hookHandle = null;
+    this._callback = null;
+  }
+}</pre></details>
+<details class="art"><summary>
+src/win/winOverlayWindow.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">134 lines</span></summary>
+<pre>import ffi from &#x27;node:ffi-napi&#x27;;
+import ref from &#x27;node:ref-napi&#x27;;
+import StructType from &#x27;ref-struct-napi&#x27;;
+
+const voidPtr = ref.refType(ref.types.void);
+
+const user32 = ffi.Library(&#x27;user32&#x27;, {
+  CreateWindowExW: [voidPtr, [&#x27;uint32&#x27;, voidPtr, voidPtr, &#x27;uint32&#x27;, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;, voidPtr, voidPtr, voidPtr, voidPtr]],
+  DestroyWindow: [&#x27;bool&#x27;, [voidPtr]],
+  ShowWindow: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;]],
+  UpdateWindow: [&#x27;bool&#x27;, [voidPtr]],
+  SetLayeredWindowAttributes: [&#x27;bool&#x27;, [voidPtr, &#x27;uint32&#x27;, &#x27;uint8&#x27;, &#x27;uint32&#x27;]],
+  GetSystemMetrics: [&#x27;int&#x27;, [&#x27;int&#x27;]],
+  InvalidateRect: [&#x27;bool&#x27;, [voidPtr, voidPtr, &#x27;bool&#x27;]],
+  GetDC: [voidPtr, [voidPtr]],
+  ReleaseDC: [&#x27;int&#x27;, [voidPtr, voidPtr]]
+});
+
+const gdi32 = ffi.Library(&#x27;gdi32&#x27;, {
+  CreateSolidBrush: [voidPtr, [&#x27;uint32&#x27;]],
+  DeleteObject: [&#x27;bool&#x27;, [voidPtr]],
+  Rectangle: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;]],
+  Ellipse: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;, &#x27;int&#x27;]],
+  SelectObject: [voidPtr, [voidPtr, voidPtr]],
+  SetTextColor: [&#x27;uint32&#x27;, [voidPtr, &#x27;uint32&#x27;]],
+  SetBkMode: [&#x27;int&#x27;, [voidPtr, &#x27;int&#x27;]],
+  TextOutW: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;, &#x27;int&#x27;, voidPtr, &#x27;int&#x27;]]
+});
+
+const kernel32 = ffi.Library(&#x27;kernel32&#x27;, {
+  GetModuleHandleW: [voidPtr, [voidPtr]]
+});
+
+const WS_POPUP = 0x80000000;
+const WS_EX_TOPMOST = 0x00000008;
+const WS_EX_TOOLWINDOW = 0x00000080;
+const WS_EX_LAYERED = 0x00080000;
+const WS_EX_TRANSPARENT = 0x00000020; // click-through
+const WS_EX_NOACTIVATE = 0x08000000;
+
+const SW_SHOWNOACTIVATE = 4;
+const LWA_ALPHA = 0x2;
+
+const SM_CXSCREEN = 0;
+const SM_CYSCREEN = 1;
+
+function wstr(s) {
+  return Buffer.from(s + &#x27;\0&#x27;, &#x27;ucs2&#x27;);
+}
+
+function rgb(r, g, b) {
+  return (b &lt;&lt; 16) | (g &lt;&lt; 8) | r;
+}
+
+export class WinOverlayWindow {
+  constructor() {
+    this.hwnd = null;
+    this._running = false;
+    this._frame = { x: 0, y: 0, mode: &#x27;normal&#x27;, tInput: 0n, tPresent: 0n };
+  }
+
+  start() {
+    if (process.platform !== &#x27;win32&#x27;) throw new Error(&#x27;WinOverlayWindow is Windows-only&#x27;);
+    if (this._running) return;
+
+    const hInstance = kernel32.GetModuleHandleW(ref.NULL);
+    const className = wstr(&#x27;STATIC&#x27;);
+    const windowName = wstr(&#x27;PodiumOverlay&#x27;);
+
+    const width = user32.GetSystemMetrics(SM_CXSCREEN);
+    const height = user32.GetSystemMetrics(SM_CYSCREEN);
+
+    const exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+    const style = WS_POPUP;
+
+    this.hwnd = user32.CreateWindowExW(exStyle, className, windowName, style, 0, 0, width, height, ref.NULL, ref.NULL, hInstance, ref.NULL);
+
+    if (ref.isNull(this.hwnd)) {
+      this.hwnd = null;
+      throw new Error(&#x27;CreateWindowExW failed&#x27;);
+    }
+
+    user32.SetLayeredWindowAttributes(this.hwnd, 0, 220, LWA_ALPHA);
+    user32.ShowWindow(this.hwnd, SW_SHOWNOACTIVATE);
+    user32.UpdateWindow(this.hwnd);
+
+    this._running = true;
+  }
+
+  stop() {
+    if (!this._running) return;
+    this._running = false;
+    if (this.hwnd) {
+      user32.DestroyWindow(this.hwnd);
+      this.hwnd = null;
+    }
+  }
+
+  /** @param {{x:number,y:number,mode:string,tInput:bigint,tPresent:bigint}} frame */
+  async present(frame) {
+    if (!this._running || !this.hwnd) return;
+    this._frame = frame;
+
+    const hdc = user32.GetDC(this.hwnd);
+    if (!ref.isNull(hdc)) {
+      try {
+        const isHighlight = frame.mode === &#x27;highlight&#x27;;
+        const col = isHighlight ? rgb(255, 80, 80) : rgb(80, 220, 255);
+        const brush = gdi32.CreateSolidBrush(col);
+        const prev = gdi32.SelectObject(hdc, brush);
+        const r = isHighlight ? 18 : 12;
+        gdi32.Ellipse(hdc, frame.x - r, frame.y - r, frame.x + r, frame.y + r);
+        gdi32.SelectObject(hdc, prev);
+        gdi32.DeleteObject(brush);
+
+        const badgeBrush = gdi32.CreateSolidBrush(rgb(0, 0, 0));
+        const prev2 = gdi32.SelectObject(hdc, badgeBrush);
+        gdi32.Rectangle(hdc, 20, 20, 260, 76);
+        gdi32.SelectObject(hdc, prev2);
+        gdi32.DeleteObject(badgeBrush);
+
+        gdi32.SetBkMode(hdc, 1);
+        gdi32.SetTextColor(hdc, rgb(255, 255, 255));
+        const text = `mode:${frame.mode}`;
+        const buf = wstr(text);
+        gdi32.TextOutW(hdc, 30, 38, buf, text.length);
+      } finally {
+        user32.ReleaseDC(this.hwnd, hdc);
+      }
+    }
+
+    user32.InvalidateRect(this.hwnd, ref.NULL, true);
+  }
+}</pre></details>
+<details class="art"><summary>
+src/win/winRuntime.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">116 lines</span></summary>
+<pre>import ffi from &#x27;node:ffi-napi&#x27;;
+import ref from &#x27;node:ref-napi&#x27;;
+
+import { AppLoop } from &#x27;../appLoop.mjs&#x27;;
+import { createInstrumentation } from &#x27;../instrumentation.mjs&#x27;;
+import { nowTicks } from &#x27;./timePerf.mjs&#x27;;
+import { WinOverlayWindow } from &#x27;./winOverlayWindow.mjs&#x27;;
+import { WinGlobalMouseHook, WM_APP_POINTER, WM_APP_TOGGLE_MODE } from &#x27;./winGlobalMouseHook.mjs&#x27;;
+
+const voidPtr = ref.refType(ref.types.void);
+
+const MSG = require(&#x27;ref-struct-napi&#x27;)({
+  hwnd: voidPtr,
+  message: ref.types.uint32,
+  wParam: ref.types.uint32,
+  lParam: ref.types.int32,
+  time: ref.types.uint32,
+  pt_x: ref.types.long,
+  pt_y: ref.types.long
+});
+
+const user32 = ffi.Library(&#x27;user32&#x27;, {
+  GetMessageW: [&#x27;bool&#x27;, [ref.refType(MSG), voidPtr, &#x27;uint32&#x27;, &#x27;uint32&#x27;]],
+  TranslateMessage: [&#x27;bool&#x27;, [ref.refType(MSG)]],
+  DispatchMessageW: [&#x27;int&#x27;, [ref.refType(MSG)]],
+  PeekMessageW: [&#x27;bool&#x27;, [ref.refType(MSG), voidPtr, &#x27;uint32&#x27;, &#x27;uint32&#x27;, &#x27;uint32&#x27;]],
+  PostThreadMessageW: [&#x27;bool&#x27;, [&#x27;uint32&#x27;, &#x27;uint32&#x27;, &#x27;uint32&#x27;, &#x27;int32&#x27;]],
+  GetCurrentThreadId: [&#x27;uint32&#x27;, []],
+  RegisterHotKey: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;, &#x27;uint32&#x27;, &#x27;uint32&#x27;]],
+  UnregisterHotKey: [&#x27;bool&#x27;, [voidPtr, &#x27;int&#x27;]],
+  PostQuitMessage: [&#x27;void&#x27;, [&#x27;int&#x27;]]
+});
+
+const PM_REMOVE = 0x0001;
+const WM_HOTKEY = 0x0312;
+
+const MOD_CONTROL = 0x0002;
+const MOD_SHIFT = 0x0004;
+const VK_O = 0x4f;
+
+export async function runWinOverlay({ durationMs = 2000 } = {}) {
+  if (process.platform !== &#x27;win32&#x27;) {
+    throw new Error(&#x27;runWinOverlay is Windows-only&#x27;);
+  }
+
+  const input = createWinInput();
+  const overlay = new WinOverlayWindow();
+  const ins = createInstrumentation({ capacity: 50_000, nowTicks });
+  const loop = new AppLoop({ overlay, input, instrumentation: ins });
+
+  await loop.start();
+
+  // Register a hotkey: Ctrl+Shift+O toggles mode.
+  user32.RegisterHotKey(ref.NULL, 1, MOD_CONTROL | MOD_SHIFT, VK_O);
+
+  // Stop after duration.
+  setTimeout(() =&gt; {
+    try {
+      // Use our message loop thread to break GetMessage.
+      user32.PostQuitMessage(0);
+    } catch {
+      // ignore
+    }
+  }, durationMs).unref?.();
+
+  const msg = new MSG();
+  // Message loop keeps running regardless of overlay focus.
+  while (user32.GetMessageW(msg.ref(), ref.NULL, 0, 0)) {
+    const m = msg.message;
+    if (m === WM_APP_POINTER) {
+      const x = msg.wParam | 0;
+      const y = msg.lParam | 0;
+      input._emitPointerFromHook(x, y);
+    } else if (m === WM_APP_TOGGLE_MODE || m === WM_HOTKEY) {
+      input._emitToggleFromHotkey();
+    }
+
+    user32.TranslateMessage(msg.ref());
+    user32.DispatchMessageW(msg.ref());
+  }
+
+  user32.UnregisterHotKey(ref.NULL, 1);
+  await loop.stop();
+
+  return ins;
+}
+
+function createWinInput() {
+  const handlers = { pointer: new Set(), toggle: new Set() };
+  const threadId = user32.GetCurrentThreadId();
+
+  const hook = new WinGlobalMouseHook({
+    postThreadMessage: (message, wParam, lParam) =&gt; user32.PostThreadMessageW(threadId, message, wParam, lParam)
+  });
+
+  return {
+    onPointer(cb) {
+      handlers.pointer.add(cb);
+    },
+    onToggleMode(cb) {
+      handlers.toggle.add(cb);
+    },
+    async start() {
+      hook.start();
+    },
+    async stop() {
+      hook.stop();
+    },
+    _emitPointerFromHook(x, y) {
+      for (const cb of handlers.pointer) cb({ x, y });
+    },
+    _emitToggleFromHotkey() {
+      for (const cb of handlers.toggle) cb();
+    }
+  };
+}</pre></details>
+<details class="art"><summary>
+test/appLoop.test.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">54 lines</span></summary>
+<pre>import test from &#x27;node:test&#x27;;
+import assert from &#x27;node:assert/strict&#x27;;
+
+import { createInstrumentation } from &#x27;../src/instrumentation.mjs&#x27;;
+import { AppLoop } from &#x27;../src/appLoop.mjs&#x27;;
+import { SyntheticInput } from &#x27;../src/syntheticInput.mjs&#x27;;
+import { SyntheticOverlay } from &#x27;../src/syntheticOverlay.mjs&#x27;;
+import { Modes } from &#x27;../src/mode.mjs&#x27;;
+
+test(&#x27;AppLoop coalesces pointer events and records input/present timestamps&#x27;, async () =&gt; {
+  const input = new SyntheticInput();
+  const overlay = new SyntheticOverlay();
+  const ins = createInstrumentation({ capacity: 128 });
+
+  const loop = new AppLoop({ overlay, input, instrumentation: ins });
+  await loop.start();
+
+  input.emitPointer({ x: 1, y: 2 });
+  input.emitPointer({ x: 3, y: 4 });
+
+  await new Promise((r) =&gt; setImmediate(r));
+
+  assert.equal(overlay.presentCount, 1);
+  assert.deepEqual({ x: overlay.lastFrame.x, y: overlay.lastFrame.y }, { x: 3, y: 4 });
+
+  const events = ins.ring.snapshot();
+  const hasInput = events.some((e) =&gt; e.kind === &#x27;input&#x27; &amp;&amp; typeof e.tInput === &#x27;bigint&#x27;);
+  const present = events.find((e) =&gt; e.kind === &#x27;present&#x27;);
+
+  assert.ok(hasInput);
+  assert.ok(present);
+  assert.ok(present.tPresent &gt;= present.tInput);
+
+  await loop.stop();
+});
+
+test(&#x27;AppLoop mode toggle affects presented frame&#x27;, async () =&gt; {
+  const input = new SyntheticInput();
+  const overlay = new SyntheticOverlay();
+  const ins = createInstrumentation({ capacity: 128 });
+
+  const loop = new AppLoop({ overlay, input, instrumentation: ins });
+  await loop.start();
+
+  input.emitPointer({ x: 10, y: 20 });
+  await new Promise((r) =&gt; setImmediate(r));
+  assert.equal(overlay.lastFrame.mode, Modes.Normal);
+
+  input.emitToggleMode();
+  await new Promise((r) =&gt; setImmediate(r));
+  assert.equal(overlay.lastFrame.mode, Modes.Highlight);
+
+  await loop.stop();
+});</pre></details>
+<details class="art"><summary>
+test/instrumentation.test.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">24 lines</span></summary>
+<pre>import test from &#x27;node:test&#x27;;
+import assert from &#x27;node:assert/strict&#x27;;
+
+import { InstrumentationRingBuffer } from &#x27;../src/instrumentation.mjs&#x27;;
+
+test(&#x27;InstrumentationRingBuffer snapshots in chronological order with wraparound&#x27;, () =&gt; {
+  const ring = new InstrumentationRingBuffer(3);
+  ring.record({ kind: &#x27;a&#x27;, i: 1 });
+  ring.record({ kind: &#x27;a&#x27;, i: 2 });
+  ring.record({ kind: &#x27;a&#x27;, i: 3 });
+  ring.record({ kind: &#x27;a&#x27;, i: 4 });
+
+  assert.deepEqual(
+    ring.snapshot().map((e) =&gt; e.i),
+    [2, 3, 4]
+  );
+});
+
+test(&#x27;InstrumentationRingBuffer.clear empties the buffer&#x27;, () =&gt; {
+  const ring = new InstrumentationRingBuffer(2);
+  ring.record({ kind: &#x27;x&#x27; });
+  ring.clear();
+  assert.equal(ring.snapshot().length, 0);
+});</pre></details>
+<details class="art"><summary>
+test_evidence/bench.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">5 lines</span></summary>
+<pre>
+&gt; win-global-input-overlay@0.0.0 bench
+&gt; node scripts/bench.mjs
+
+{&quot;bench&quot;:{&quot;durationMs&quot;:2000,&quot;samples&quot;:59,&quot;tickDelta&quot;:{&quot;min&quot;:29410,&quot;p50&quot;:1762031,&quot;p95&quot;:9665684,&quot;max&quot;:10600151}}}</pre></details>
+<details class="art"><summary>
+test_evidence/build_win.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">15 lines</span></summary>
+<pre>
+&gt; win-global-input-overlay@0.0.0 build:win
+&gt; node scripts/build-win-exe.mjs
+
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  WinHookOverlay -&gt; q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\worktrees\leo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.31
+
+Workload updates are available. Run `dotnet workload list` for more information.</pre></details>
+<details class="art"><summary>
+test_evidence/e2e.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">21 lines</span></summary>
+<pre>
+Running 4 tests using 2 workers
+
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  WinHookOverlay -&gt; q:\projects\inspired-arc\podium\.podium\workdir\019f8959-9276-73b6-8ce0-71797de18b07\work\019f8959-9276-73b6-8ce0-71797de18b07\repo\native\WinHookOverlay\bin\Release\net9.0-windows\win-hook-overlay.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.33
+
+Workload updates are available. Run `dotnet workload list` for more information.
+  ✓  1 tests-e2e\smoke.spec.mjs:4:1 › win-smoke emits instrumentation (windows-only) (3.0s)
+  -  2 tests-e2e\win-integration.spec.mjs:46:3 › win-hook-overlay integration (windows-only) › OS-level injection proves global hook receives moves while another window has focus (fallback skips if blocked)
+  ✓  3 tests-e2e\win-integration.spec.mjs:70:3 › win-hook-overlay integration (windows-only) › in-process injection fallback produces events even when OS injection is blocked (1.9s)
+  ✓  4 tests-e2e\win-integration.spec.mjs:84:3 › win-hook-overlay integration (windows-only) › mode switching repeatedly during movement does not deadlock and emits mode events (2.8s)
+
+  1 skipped
+  3 passed (10.2s)</pre></details>
+<details class="art"><summary>
+test_evidence/stability.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">5 lines</span></summary>
+<pre>
+&gt; win-global-input-overlay@0.0.0 stability
+&gt; node scripts/stability.mjs
+
+{&quot;stability&quot;:{&quot;runs&quot;:20,&quot;durationMs&quot;:250,&quot;ok&quot;:20,&quot;fail&quot;:0}}</pre></details>
+<details class="art"><summary>
+test_evidence/summary.md<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">45 lines</span></summary>
+<pre># Sprint 2 – global-hook-overlay-modes-tests-instrumentation
+
+## Stack decision
+- **Windows executable:** C# / .NET (WinForms) in `native/WinHookOverlay`.
+  - Reason: we need a real **WH_MOUSE_LL** global hook + topmost **WS_EX_NOACTIVATE** overlay; doing this from Node would require native addons/FFI which are not viable in this environment.
+- **Test harness:** Node + Playwright for integration tests + Node’s built-in test runner for unit tests.
+
+## What I built/changed
+### Executable behavior (win-hook-overlay.exe)
+- Registers a **global low-level mouse hook (WH_MOUSE_LL)** and emits `input_move` events even when unfocused.
+- Renders a simple always-on-top overlay (WinForms) that is **click-through** and **does not activate** (WS_EX_TRANSPARENT + WS_EX_NOACTIVATE). A small render loop invalidates only when new input arrives.
+- Implements **two runtime-switchable modes** (`normal` / `alt`).
+  - Toggle via **Ctrl+Shift+O** (global hotkey) and via test injection flag.
+  - Emits `mode` JSON events on every change including `reason`.
+- Emits benchmark-friendly **JSONL** to stdout with timestamps:
+  - `input_move`: `{ tInput, x, y, source }` where `source` is **&quot;hook&quot;** (WH_MOUSE_LL) or **&quot;inject&quot;** (in-process fallback).
+  - `present`: `{ tInput, tPresent, x, y, mode }` to correlate input→overlay present latency.
+
+### OS-level injection support (for tests)
+- Added `--os-inject-moves`:
+  - Uses Win32 `SendInput(MOUSEEVENTF_MOVE)` to move the OS cursor.
+  - Verifies permission by checking `GetCursorPos` delta; if blocked, emits `os_inject_unsupported` with a reason so tests can **skip clearly**.
+
+## Automated tests
+### Unit tests (`npm test`)
+- Covers the pure JS app-loop / instrumentation utilities (ring buffer ordering, mode toggling impacts).
+
+### Integration tests (`npx playwright test`)
+- **OS-level injection test:** launches the exe with `--os-inject-moves`, focuses a Playwright window (so the overlay stays unfocused), then asserts the logs contain `input_move` events with `source === &quot;hook&quot;`.
+  - If `SendInput` is blocked in the environment, the test **skips** with the emitted reason and the suite still runs.
+- **Fallback injection test:** launches with `--inject-moves` and asserts `source === &quot;inject&quot;` events are present.
+- **Stability under toggling:** runs continuous movement plus repeated mode toggles and asserts:
+  - process exits cleanly (no hang/crash)
+  - `mode` events observed and both modes appear
+  - movement + present events continue.
+
+## Results (captured logs)
+- Unit: see `test_evidence/unit.txt` (green).
+- E2E: see `test_evidence/e2e.txt` (green; OS injection test may skip if blocked).
+
+## Accessibility / UX notes
+- Overlay is non-interactive by design (click-through, no focus theft). Mode is shown as text in the overlay for easy human verification.
+
+## Known gaps
+- OS-level injection may be blocked by system policy (e.g., locked-down CI). When that happens, we skip the OS-injection proof test with a structured reason and still run the in-process fallback + stability coverage.</pre></details>
+<details class="art"><summary>
+test_evidence/unit.txt<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">38 lines</span></summary>
+<pre>
+&gt; win-global-input-overlay@0.0.0 test
+&gt; node --test
+
+TAP version 13
+# Subtest: AppLoop coalesces pointer events and records input/present timestamps
+ok 1 - AppLoop coalesces pointer events and records input/present timestamps
+  ---
+  duration_ms: 5.012
+  type: &#x27;test&#x27;
+  ...
+# Subtest: AppLoop mode toggle affects presented frame
+ok 2 - AppLoop mode toggle affects presented frame
+  ---
+  duration_ms: 1.4998
+  type: &#x27;test&#x27;
+  ...
+# Subtest: InstrumentationRingBuffer snapshots in chronological order with wraparound
+ok 3 - InstrumentationRingBuffer snapshots in chronological order with wraparound
+  ---
+  duration_ms: 1.7876
+  type: &#x27;test&#x27;
+  ...
+# Subtest: InstrumentationRingBuffer.clear empties the buffer
+ok 4 - InstrumentationRingBuffer.clear empties the buffer
+  ---
+  duration_ms: 0.2349
+  type: &#x27;test&#x27;
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 152.2695</pre></details>
+<details class="art"><summary>
+tests-e2e/smoke.spec.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">14 lines</span></summary>
+<pre>import { test, expect } from &#x27;@playwright/test&#x27;;
+import { execSync } from &#x27;node:child_process&#x27;;
+
+test(&#x27;win-smoke emits instrumentation (windows-only)&#x27;, async () =&gt; {
+  test.skip(process.platform !== &#x27;win32&#x27;, &#x27;Windows-only overlay/hook&#x27;);
+
+  const out = execSync(&#x27;node scripts/build-win-exe.mjs &amp;&amp; node scripts/win-smoke.mjs&#x27;, {
+    env: { ...process.env, SMOKE_MS: &#x27;750&#x27; },
+    stdio: [&#x27;ignore&#x27;, &#x27;pipe&#x27;, &#x27;pipe&#x27;]
+  }).toString(&#x27;utf8&#x27;);
+
+  expect(out).toContain(&#x27;win-smoke: starting&#x27;);
+  expect(out).toContain(&#x27;&quot;kind&quot;:&quot;app_start&quot;&#x27;);
+});</pre></details>
+<details class="art"><summary>
+tests-e2e/win-integration.spec.mjs<span class="meta"><span class="pill role">Ava</span><span class="pill role">Devon</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Priya</span></span><span class="meta">110 lines</span></summary>
+<pre>import { test, expect } from &#x27;@playwright/test&#x27;;
+import { spawnSync } from &#x27;node:child_process&#x27;;
+import { runWinHookOverlay } from &#x27;../scripts/run-win-exe.mjs&#x27;;
+
+function parseJsonl(text) {
+  return text
+    .split(/\r?\n/)
+    .map((l) =&gt; l.trim())
+    .filter(Boolean)
+    .map((l) =&gt; JSON.parse(l));
+}
+
+async function collectProcessJson(child) {
+  let out = &#x27;&#x27;;
+  child.stdout.setEncoding(&#x27;utf8&#x27;);
+  child.stdout.on(&#x27;data&#x27;, (d) =&gt; (out += d));
+
+  const exitCode = await new Promise((resolve) =&gt; child.on(&#x27;close&#x27;, resolve));
+  expect(exitCode).toBe(0);
+  return parseJsonl(out);
+}
+
+function expectSchema(evs) {
+  const input = evs.find((e) =&gt; e.kind === &#x27;input_move&#x27;);
+  const present = evs.find((e) =&gt; e.kind === &#x27;present&#x27;);
+  expect(input).toBeTruthy();
+  expect(typeof input.tInput).toBe(&#x27;number&#x27;);
+  expect(typeof input.x).toBe(&#x27;number&#x27;);
+  expect(typeof input.y).toBe(&#x27;number&#x27;);
+  expect(typeof input.source).toBe(&#x27;string&#x27;);
+
+  expect(present).toBeTruthy();
+  expect(typeof present.tInput).toBe(&#x27;number&#x27;);
+  expect(typeof present.tPresent).toBe(&#x27;number&#x27;);
+  expect(present.tPresent).toBeGreaterThanOrEqual(present.tInput);
+  expect(typeof present.mode).toBe(&#x27;string&#x27;);
+}
+
+test.describe(&#x27;win-hook-overlay integration (windows-only)&#x27;, () =&gt; {
+  test.skip(process.platform !== &#x27;win32&#x27;, &#x27;Windows-only executable&#x27;);
+
+  test.beforeAll(() =&gt; {
+    spawnSync(&#x27;node&#x27;, [&#x27;scripts/build-win-exe.mjs&#x27;], { stdio: &#x27;inherit&#x27; });
+  });
+
+  test(&#x27;OS-level injection proves global hook receives moves while another window has focus (fallback skips if blocked)&#x27;, async ({ page }) =&gt; {
+    const child = runWinHookOverlay({ durationMs: 2200, extraArgs: [&#x27;--os-inject-moves&#x27;] });
+
+    // Ensure another window is active; overlay is WS_EX_NOACTIVATE.
+    await page.setContent(&#x27;&lt;button id=&quot;b&quot;&gt;focus&lt;/button&gt;&#x27;);
+    await page.click(&#x27;#b&#x27;);
+
+    const evs = await collectProcessJson(child);
+
+    expect(evs.some((e) =&gt; e.kind === &#x27;app_start&#x27;)).toBeTruthy();
+
+    const osUnsupported = evs.find((e) =&gt; e.kind === &#x27;os_inject_unsupported&#x27;);
+    if (osUnsupported) {
+      test.skip(true, `OS injection not permitted/available: ${osUnsupported.reason}`);
+    }
+
+    // Must see hook-derived movement (not merely in-process inject).
+    const hookMoves = evs.filter((e) =&gt; e.kind === &#x27;input_move&#x27; &amp;&amp; e.source === &#x27;hook&#x27;);
+    expect(hookMoves.length).toBeGreaterThan(0);
+
+    // Must render/present in response.
+    expectSchema(evs);
+  });
+
+  test(&#x27;in-process injection fallback produces events even when OS injection is blocked&#x27;, async ({ page }) =&gt; {
+    const child = runWinHookOverlay({ durationMs: 1500, extraArgs: [&#x27;--inject-moves&#x27;] });
+
+    await page.setContent(&#x27;&lt;button id=&quot;b&quot;&gt;focus&lt;/button&gt;&#x27;);
+    await page.click(&#x27;#b&#x27;);
+
+    const evs = await collectProcessJson(child);
+    expect(evs.some((e) =&gt; e.kind === &#x27;app_start&#x27;)).toBeTruthy();
+
+    const injectMoves = evs.filter((e) =&gt; e.kind === &#x27;input_move&#x27; &amp;&amp; e.source === &#x27;inject&#x27;);
+    expect(injectMoves.length).toBeGreaterThan(0);
+    expectSchema(evs);
+  });
+
+  test(&#x27;mode switching repeatedly during movement does not deadlock and emits mode events&#x27;, async ({ page }) =&gt; {
+    const child = runWinHookOverlay({ durationMs: 2400, extraArgs: [&#x27;--inject-moves&#x27;, &#x27;--inject-toggles&#x27;, &#x27;10&#x27;] });
+
+    await page.setContent(&#x27;&lt;input id=&quot;i&quot; /&gt;&#x27;);
+    await page.focus(&#x27;#i&#x27;);
+
+    const evs = await collectProcessJson(child);
+
+    const modeEvents = evs.filter((e) =&gt; e.kind === &#x27;mode&#x27;);
+    expect(modeEvents.length).toBeGreaterThanOrEqual(5);
+
+    const uniqueModes = new Set(modeEvents.map((e) =&gt; e.mode));
+    expect(uniqueModes.has(&#x27;normal&#x27;)).toBeTruthy();
+    expect(uniqueModes.has(&#x27;alt&#x27;)).toBeTruthy();
+
+    // Still receiving movement + presenting.
+    expect(evs.filter((e) =&gt; e.kind === &#x27;input_move&#x27;).length).toBeGreaterThan(0);
+    expect(evs.filter((e) =&gt; e.kind === &#x27;present&#x27;).length).toBeGreaterThan(0);
+
+    expectSchema(evs);
+
+    const m0 = modeEvents[0];
+    expect(typeof m0.tMode).toBe(&#x27;number&#x27;);
+    expect([&#x27;normal&#x27;, &#x27;alt&#x27;]).toContain(m0.mode);
+    expect(typeof m0.reason).toBe(&#x27;string&#x27;);
+  });
+});</pre></details>
+<details class="art"><summary>
+TODO.md<span class="meta"><span class="pill role">Ava</span><span class="pill role">Jordan</span><span class="pill role">Leo</span><span class="pill role">Owen</span><span class="pill role">Priya</span><span class="pill role">Samara</span></span><span class="meta">16 lines</span></summary>
+<pre># TODO
+- [ ] Inspect repo for existing stack/build tooling; decide implementation stack and record in summary later
+- [ ] Implement Windows overlay window (topmost, click-through) and render cursor + mode badge
+- [ ] Implement global input capture (low-level mouse hook) and feed events into app loop even when unfocused
+- [ ] Implement app loop: event-driven update without fixed sleeps; mode switching via hotkey; instrumentation timestamps for input and present
+- [ ] Add unit tests for mode state machine + instrumentation ring buffer
+- [ ] Add benchmark executable (synthetic in-process pointer events) reporting latency stats including p95
+- [ ] Add stability test executable running 100 start/run/stop sessions and reporting crash-free rate
+- [ ] Wire npm scripts: test, e2e (Playwright), bench, stability, and single command to run both bench+stability
+- [ ] Capture test evidence logs (unit + e2e) and write summary; run evidence_scan and fix findings
+- [ ] Implement Windows overlay window (topmost, non-activating) and render cursor + mode badge
+- [ ] Implement Win32 message loop + event-driven present scheduling for real hook+overlay pipeline; include mode switching + instrumentation tInput/tPresent
+- [ ] Update benchmark so it produces &gt;1 present sample (avoid microtask coalescing) and p95 over multiple samples
+- [ ] Add Windows-only smoke automation that runs hook+overlay for a short time and prints instrumentation; wire a single command that runs unit + smoke
+- [ ] Capture fresh unit/e2e logs and update summary; run evidence_scan and fix findings
+- [ ] Replace Node FFI-based Win32 hook/overlay with a Windows executable (C#/.NET) to avoid native Node addons; update Node tests to drive exe and assert JSONL logs.</pre></details>
+<footer>Generated by scripts/build_lumen_report.py from the Lumen ledger + git worktrees · model gpt-5.2 (Azure)</footer>
+</div></body></html>

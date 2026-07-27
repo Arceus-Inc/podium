@@ -138,6 +138,12 @@ def build(config: CompanyConfig) -> CompanyGraph:
         default_assignee=config.default_assignee,
     )
     governance = HorizonGovernance(horizon)
+    # Bind the governance seam onto the factory that ACTUALLY runs the beats (`beat_runner_for` above).
+    # horizon/governance need the org (hence this factory) to exist first, so the port is bound here,
+    # after construction. Without this the CEO's beats run on a port-less factory and its governance
+    # tools (governance_read / roadmap_propose / proposal_*) are dropped fail-closed — the CEO could
+    # propose a workforce but never author or steer direction (horizon's engine sat inert).
+    factory.bind_governance(governance)
     ceo_factory = EmployeeHarnessFactory(
         api_key=config.api_key,
         base_url=config.base_url,

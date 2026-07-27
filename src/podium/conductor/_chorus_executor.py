@@ -21,6 +21,7 @@ from typing import Any
 
 import structlog
 from chorus.ledger._models import TaskStatus
+from horizon.model import Decision
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.companies import mark_company_idle
@@ -155,8 +156,32 @@ class CompanyGraphHost:
             path = self._workdir / str(company_id) / "direction-report.md"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(runtime.graph.horizon.report(), encoding="utf-8")
-        except Exception:  # noqa: BLE001 -- a report that can't be written must never fail a run
+        except Exception:  # a report that can't be written must never fail a run
             logger.warning("direction_report_write_failed", company_id=str(company_id))
+
+    async def propose_next_direction(self, runtime: _CompanyRuntime) -> None:
+        """Drive horizon's HUMAN-GATED generation funnel over the org's own outcome stream (F2).
+
+        After a delivery run ends, horizon reflects on the landed outcomes — its ``InternalSource``
+        reads the very same chorus ``OutcomeFeed`` the listener folds — scouts + analyses them, and may
+        PROPOSE the next decision. Proposals are human-gated: they land in horizon's ``ProposalStore``
+        and surface via the cockpit's direction door (``list_proposals`` / governance ``read_direction``);
+        nothing reaches the live tree until an operator approves, exactly like the CEO workforce plan.
+
+        Runs off the event loop (the reasoner call is blocking, the heartbeat shares this loop) and is
+        best-effort — a proposal that can't be produced must never fail the run. Cheap when nothing is
+        new: the evidence bus dedups, so a survey with no fresh outcomes makes no LLM call.
+        """
+        import asyncio
+
+        from horizon.generation import InternalSource
+
+        horizon = runtime.graph.horizon
+        try:
+            source = InternalSource(horizon._outcomes)
+            await asyncio.to_thread(horizon.generate, [source])
+        except Exception:  # proposing the next direction must never fail a run
+            logger.warning("horizon_generate_failed")
 
     async def aclose(self) -> None:
         for runtime in self._runtimes.values():
@@ -167,31 +192,17 @@ class CompanyGraphHost:
             runtime.graph.close()  # the company's live Postgres connection
 
 
-_FORMATION_CONTRACT = (
-    "This is a FORMATION directive: form the permanent organization for the objective below — "
-    "do NOT build the product yourself and do NOT write code. Process guidance (not acceptance "
-    "criteria): consult workforce_catalog_read for the valid professions, then submit one "
-    "complete typed workforce plan via workforce_plan_propose.\n\n"
-    "DONE means exactly this, judged from worktree artifacts alone: `workforce_plan.json` "
-    "contains one proposed plan in which every hire names a catalog profession, a reporting "
-    "line, and 2-3 concrete 'when I'm relevant' responsibility statements (e.g. 'owns the "
-        "parser module' — leads later use these to pick assignees); the org is NOT flat — when the "
-        "objective needs more than one specialist, at least one hire holds a bounded management "
-        "grant (can_lead=true, max_delegation_depth >= 1, max_team_size covering itself plus its "
-        "reports) and the other hires report to that lead rather than to the CEO; every budget "
-        "allocation is bounded; and "
-    "`governance-ledger.md` records the proposal line. Tool-call ordering is NOT observable "
-    "and is never an acceptance criterion. The plan stays pending for a human decision; never "
-    "claim anyone was hired. Then stop.\n\n## Objective\n"
-)
-
-
 def _effective_directive(params: dict[str, Any], directive: str) -> str:
-    """Formation runs carry the engine's formation contract server-side (live 2026-07-18: a
-    raw founder objective sent as-is made the CEO build the whole product personally instead
-    of proposing an org — the product owns the incantation, not the founder)."""
+    """Formation runs are reframed as org-building tasks (live 2026-07-18: a raw founder objective
+    sent as-is made the CEO build the whole product personally instead of proposing an org).
+
+    The framing is a PROMPT and prompts are an employee concern, so the words live in the CEO
+    employee (``chorus_employee.ceo.formation_directive``); the conductor only decides WHEN a run is
+    a formation run and asks the employee for the incantation — no prompt text lives here."""
     if params.get("execution_mode") == "formation":
-        return _FORMATION_CONTRACT + directive
+        from chorus_employee.ceo import formation_directive
+
+        return formation_directive(directive)
     return directive
 
 
@@ -266,6 +277,35 @@ def _ensure_root_goal(ledger: Any, directive: str) -> str | None:
     return str(created.id)
 
 
+def _seed_horizon_direction(graph: CompanyGraph, *, root_goal_id: str, objective: str) -> None:
+    """Mirror the company's root chorus goal into horizon as a live Decision + adopted Goal (F2).
+
+    Without this, horizon's stores stay empty: its OutcomeListener has no strategy record to fold
+    delivery verdicts into, its StrategyStore has no goals, and ``horizon.report()`` renders blank —
+    the "what's next" brain is assembled but never driven. We do NOT duplicate the goal: chorus stays
+    the source of truth for the skeleton; horizon *adopts* the existing goal id (keeping only its own
+    strategy mirror) and records the horizon-native decision -> goal edge. The decision id is derived
+    from the goal id so a later run re-seeds the SAME decision instead of minting a duplicate.
+    Idempotent — safe to call on every run.
+    """
+    import re
+
+    horizon = graph.horizon
+    decision_id = f"dec-{root_goal_id}"
+    if not any(state.decision.id == decision_id for state in horizon.state()):
+        first_sentence = re.split(r"(?<=[.!?])\s", objective.strip(), maxsplit=1)[0]
+        statement = (first_sentence or objective).strip()[:200]
+        horizon.seed_decision(
+            Decision(
+                id=decision_id,
+                statement=statement or "Founder objective",
+                status="active",
+                rationale="Founder objective — the company's root goal (chorus-owned).",
+            )
+        )
+    horizon.adopt_goal(root_goal_id, decision_id=decision_id)
+
+
 def _root_resolver(graph: CompanyGraph) -> Any:
     """Map any chorus task id to its root (the run's engine_task_id) by walking parents in the ledger."""
     ledger = graph.org._ledger
@@ -327,6 +367,17 @@ class ChorusRunExecutor:
                 ),
             )
             task_id = task.id
+            # F2: mirror the company's root goal into horizon so its loop has a live decision+goal
+            # to fold outcomes into and its direction report populates. Idempotent + best-effort;
+            # a reclaim (above) already ran on a graph whose horizon stores persist on disk.
+            root_goal_id = _root_goal_id(runtime.graph.org._ledger)
+            if root_goal_id is not None:
+                try:
+                    _seed_horizon_direction(
+                        runtime.graph, root_goal_id=root_goal_id, objective=directive
+                    )
+                except Exception:  # seeding direction must never fail a run
+                    logger.warning("horizon_seed_failed", company_id=str(company_id))
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
@@ -345,5 +396,9 @@ class ChorusRunExecutor:
             # per-task cancel today (only whole-heartbeat stop, which would kill sibling runs).
             return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
         finally:
+            # A delivery outcome landed — let horizon reflect on it and (human-gated) propose what's
+            # next. Formation runs serve no delivery goal, so they don't feed the direction funnel.
+            if (params or {}).get("execution_mode") != "formation":
+                await self._host.propose_next_direction(runtime)
             # However the run ends, the loop's story lands where the cockpit door reads it.
             self._host.write_direction_report(runtime, company_id)

@@ -127,3 +127,38 @@ def test_horizon_gets_a_live_reasoner(tmp_path: Path, database_url: str) -> None
     graph = build(_config(tmp_path, database_url))
     scout = getattr(graph.horizon, "_scout", None)
     assert scout is not None  # generation lights up only when a reasoner is present
+
+
+def test_seed_horizon_direction_gives_a_live_decision_goal_and_report(
+    tmp_path: Path, database_url: str
+) -> None:
+    """F2: podium now drives horizon. Seeding the founder objective's root goal gives horizon a live
+    decision + adopted goal (chorus stays the source of truth — no duplicate goal), so its outcome
+    listener has a record to fold into and its direction report populates (both were empty before)."""
+    from podium.conductor._chorus_executor import _ensure_root_goal, _seed_horizon_direction
+
+    graph = build(_config(tmp_path, database_url))
+    try:
+        objective = "Build an AI note-taker for professionals. It must sync across devices."
+        root_goal_id = _ensure_root_goal(graph.org._ledger, objective)
+        assert root_goal_id is not None
+
+        # The F2 gap: before podium drives it, horizon is inert — no decisions, blank report.
+        assert graph.horizon.state() == []
+
+        _seed_horizon_direction(graph, root_goal_id=root_goal_id, objective=objective)
+
+        state = graph.horizon.state()
+        assert len(state) == 1
+        assert [g.id for g in state[0].goals] == [root_goal_id]
+        assert state[0].decision.statement == "Build an AI note-taker for professionals."
+        assert "Build an AI note-taker for professionals." in graph.horizon.report()
+        # No duplication — chorus still holds exactly the one root goal it authored.
+        assert len(graph.org._ledger.goals.children(None)) == 1
+
+        # Idempotent across runs — a second call mints neither a duplicate decision nor goal edge.
+        _seed_horizon_direction(graph, root_goal_id=root_goal_id, objective=objective)
+        assert len(graph.horizon.state()) == 1
+        assert [g.id for g in graph.horizon.state()[0].goals] == [root_goal_id]
+    finally:
+        graph.close()

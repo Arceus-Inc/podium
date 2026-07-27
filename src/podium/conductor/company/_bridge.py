@@ -33,10 +33,9 @@ _TO_PRIORITY: dict[str, TaskPriority] = {
     "low": TaskPriority.LOW,
 }
 
-# The chorus event kinds that carry an execution outcome horizon reacts to (the feedback loop).
+# Strategy feed kinds only — RUN_DONE / RUN_EVALUATED stay on the raw bus (Phase 0).
 _OUTCOME_KINDS: dict[EventKind, str] = {
-    EventKind.RUN_DONE: EventKind.RUN_DONE.value,
-    EventKind.RUN_EVALUATED: EventKind.RUN_EVALUATED.value,
+    EventKind.OUTCOME_LANDED: EventKind.OUTCOME_LANDED.value,
     EventKind.TASK_STATUS: EventKind.TASK_STATUS.value,
     EventKind.RECOVERY_ESCALATED: EventKind.RECOVERY_ESCALATED.value,
 }
@@ -179,14 +178,16 @@ class ChorusOutcomeFeed:
         payload = event.payload
         status = payload.get("status")
         passed = payload.get("passed")
-        if passed is None:
-            # a real chorus RUN_EVALUATED carries dream's evaluator verdict as ``outcome`` (pass|fail|
-            # needs-changes), not a boolean — map it; a non-terminal "needs-changes" stays None (dropped).
-            outcome = payload.get("outcome")
-            if outcome == "pass":
-                passed = True
-            elif outcome == "fail":
-                passed = False
+        phase = payload.get("phase") if isinstance(payload.get("phase"), str) else None
+        recovery_hint = (
+            payload.get("recovery_hint") if isinstance(payload.get("recovery_hint"), str) else None
+        )
+        summary = payload.get("summary") if isinstance(payload.get("summary"), str) else None
+        if event.kind is EventKind.OUTCOME_LANDED:
+            diagnostic = payload.get("diagnostic")
+            detail = diagnostic if isinstance(diagnostic, str) else (summary or "")
+        else:
+            detail = json.dumps(dict(payload), sort_keys=True, default=str)
         event_identity = json.dumps(
             {
                 "kind": event.kind.value,
@@ -207,7 +208,10 @@ class ChorusOutcomeFeed:
             goal_id=goal_id,
             status=str(status) if status is not None else None,
             passed=bool(passed) if passed is not None else None,
-            detail=json.dumps(dict(payload), sort_keys=True, default=str),
+            phase=phase,
+            recovery_hint=recovery_hint,
+            summary=summary,
+            detail=detail,
             parent_task_id=parent_task_id,
             root_task_id=root_task_id,
             team_id=team_id,

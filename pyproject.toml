@@ -39,7 +39,7 @@ dev = [
 # Sibling checkouts during local development, mirroring the convention the four repos already use.
 # ponytail: path deps; switch to git refs when this deploys off this machine.
 [tool.uv.sources]
-dream = { path = "../Harness", editable = true }
+dream = { path = "../dream", editable = true }
 chorus = { path = "../chorus", editable = true }
 lattice = { path = "../lattice", editable = true }
 horizon = { path = "../horizon", editable = true }

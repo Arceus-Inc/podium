@@ -63,6 +63,10 @@ export PODIUM_MODEL_BASE_URL="$AZURE_OPENAI_BASE_URL"
 export PODIUM_MODEL_DEPLOYMENT="$AZURE_OPENAI_DEPLOYMENT"
 export PODIUM_WORKDIR="$WORKDIR"
 export PODIUM_LOG_DIR="$WORKDIR/logs"
+# Warm-start the lattice learning loop for a young company: the default per-employee gate needs
+# >=2 similar beats, which a single build never reaches, so learning stays dark. MIN_CLUSTER=1 lets
+# a single strong episode consolidate; raise it once the company has run enough repeated work.
+export CHORUS_LATTICE_MIN_CLUSTER="${CHORUS_LATTICE_MIN_CLUSTER:-1}"
 mkdir -p "$WORKDIR/logs"
 
 # Role + podium migrations + engine deltas (idempotent; needs the admin DSN)
