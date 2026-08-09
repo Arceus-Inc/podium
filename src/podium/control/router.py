@@ -30,8 +30,10 @@ from podium.control._observe import (
     ArtifactSummary,
     CompanyStatus,
     OrgReport,
+    SkillRevisionView,
     SkillSummary,
     SpendRow,
+    UnknownSkillError,
     UnknownTaskError,
     WhyLink,
 )
@@ -200,6 +202,31 @@ async def employee_skills(
         company_id=company_id,
         read=lambda plane: plane.observe.skills(employee_id),
     )
+
+
+@router.get(
+    "/employees/{employee_id}/skills/{skill_id}/revisions",
+    response_model=tuple[SkillRevisionView, ...],
+)
+async def skill_revision_history(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    skill_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> tuple[SkillRevisionView, ...]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.skill_revisions(employee_id, skill_id),
+        )
+    except UnknownSkillError as exc:
+        raise HTTPException(status_code=404, detail="skill not found") from exc
 
 
 class GoalPatch(BaseModel):

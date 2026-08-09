@@ -173,6 +173,95 @@ async def test_read_doors_serve_workforce_teams_capacity_status_skills(
     assert [s["slug"] for s in skills.json()] == ["deploy-checklist"]
 
 
+async def test_skill_revision_history_door_is_ordered_and_does_not_leak(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.skills import SkillOrigin, SkillStore
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="history")
+    author_one_id = mint_id()
+    author_two_id = mint_id()
+    author_three_id = mint_id()
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.employees.create(Employee(id="lea", name="Lea", role="pm"))
+        store = SkillStore(ledger)
+        skill, first = store.create(
+            employee_id="ada",
+            slug="deploy-checklist",
+            name="Deploy checklist",
+            description="",
+            when_to_use="",
+            file_inventory=[],
+            origin=SkillOrigin.CREATED,
+            action="create",
+            label="Initial",
+            source_run_ids=("run-one",),
+            author_run_id=author_one_id,
+        )
+        skill_id = skill.id
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="patch",
+            label="Improve rollback",
+            source_run_ids=("run-two", "run-three"),
+            author_run_id=author_two_id,
+        )
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="restore",
+            label="Restore initial",
+            source_run_ids=("run-four",),
+            author_run_id=author_three_id,
+            restored_from_revision_id=first.id,
+        )
+    finally:
+        ledger.close()
+
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/employees"
+    headers = httpx.Headers((("Authorization", f"Bearer {token}"),))
+    response = await api.get(f"{base}/ada/skills/{skill_id}/revisions", headers=headers)
+
+    assert response.status_code == 200
+    revisions = response.json()
+    assert [revision["revision_no"] for revision in revisions] == [1, 2, 3]
+    assert revisions[1]["source_run_refs"] == ["run-two", "run-three"]
+    assert revisions[1]["author_run_ref"] == author_two_id
+    assert revisions[2]["restored_from_ref"] == first.id
+    assert revisions[2]["created_at"]
+
+    actual_skill_id = skill_id
+    for employee_id, skill_id in (
+        ("lea", actual_skill_id),
+        ("nobody", actual_skill_id),
+        ("ada", mint_id()),
+    ):
+        missing = await api.get(f"{base}/{employee_id}/skills/{skill_id}/revisions", headers=headers)
+        assert missing.status_code == 404
+        assert missing.json()["error"]["message"] == "skill not found"
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session, workspace_id=ws_id, slug="history-other", name="History other"
+        )
+    isolated = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{other_company.id}/employees/ada/skills/"
+        f"{actual_skill_id}/revisions",
+        headers=headers,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "skill not found"
+
+
 async def test_patch_goal_archives_it(
     database_url: str,
     sessionmaker: async_sessionmaker[AsyncSession],

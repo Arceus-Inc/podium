@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from chorus.observability import LedgerInspector
@@ -36,6 +38,22 @@ class SkillSummary(BaseModel):
     revision_no: int
 
 
+class SkillRevisionView(BaseModel):
+    """One immutable skill revision with its execution provenance."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    revision_no: int
+    action: str
+    content_hash: str
+    label: str | None
+    source_run_refs: tuple[str, ...]
+    author_run_ref: str | None
+    restored_from_ref: str | None
+    created_at: datetime
+
+
 class OrgReport(BaseModel):
     """The inspector's combined manager+leaf rollup — flat counts for allocation decisions."""
 
@@ -68,6 +86,10 @@ class WhyLink(BaseModel):
 
 class UnknownTaskError(ValueError):
     """No such task in this company."""
+
+
+class UnknownSkillError(ValueError):
+    """No such employee-owned skill in this company."""
 
 
 class ArtifactSummary(BaseModel):
@@ -201,14 +223,49 @@ class ObserveFacade:
             for skill in self._ledger.skills.list_active(employee_id)
         ]
 
+    def skill_revisions(self, employee_id: str, skill_id: str) -> tuple[SkillRevisionView, ...]:
+        """One employee-owned skill's immutable revisions, oldest first."""
+        try:
+            uuid.UUID(skill_id)
+        except ValueError:
+            raise UnknownSkillError(skill_id) from None
+        if self._ledger.employees.get(employee_id) is None:
+            raise UnknownSkillError(skill_id)
+        skill = self._ledger.skills.get(skill_id)
+        if skill is None or skill.employee_id != employee_id:
+            raise UnknownSkillError(skill_id)
+        revisions = self._ledger.skill_revisions.by_skill(skill_id)
+        return tuple(
+            SkillRevisionView(
+                id=revision.id,
+                revision_no=revision.revision_no,
+                action=revision.action,
+                content_hash=revision.content_hash,
+                label=revision.label,
+                source_run_refs=revision.source_run_ids,
+                author_run_ref=revision.author_run_id,
+                restored_from_ref=revision.restored_from_revision_id,
+                created_at=_require_created_at(revision.created_at),
+            )
+            for revision in revisions
+        )
+
+
+def _require_created_at(created_at: datetime | None) -> datetime:
+    if created_at is None:
+        raise RuntimeError("persisted skill revision is missing created_at")
+    return created_at
+
 
 __all__ = [
     "ArtifactSummary",
     "CompanyStatus",
     "ObserveFacade",
     "OrgReport",
+    "SkillRevisionView",
     "SkillSummary",
     "SpendRow",
+    "UnknownSkillError",
     "UnknownTaskError",
     "WhyLink",
 ]

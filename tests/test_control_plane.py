@@ -175,6 +175,79 @@ def test_observe_facade_reads_status_and_skills(
         plane.close()
 
 
+def test_observe_facade_reads_one_skill_revision_history(
+    database_url: str, provider: ControlPlaneProvider
+) -> None:
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.skills import SkillOrigin, SkillStore
+    from chorus.workforce import Employee
+
+    from podium.control._observe import UnknownSkillError
+
+    ws_id, company_id = uuid.uuid4(), uuid.uuid4()
+    author_one_id = mint_id()
+    author_two_id = mint_id()
+    author_three_id = mint_id()
+    dsn = _pg_conninfo(database_url, user="podium_app")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.employees.create(Employee(id="lea", name="Lea", role="pm"))
+        store = SkillStore(ledger)
+        skill, revision_one = store.create(
+            employee_id="ada",
+            slug="deploy-checklist",
+            name="Deploy checklist",
+            description="",
+            when_to_use="",
+            file_inventory=[],
+            origin=SkillOrigin.CREATED,
+            action="create",
+            label="Initial",
+            source_run_ids=("run-one",),
+            author_run_id=author_one_id,
+        )
+        skill_id = skill.id
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="patch",
+            label="Improve rollback",
+            source_run_ids=("run-two", "run-three"),
+            author_run_id=author_two_id,
+        )
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="restore",
+            label="Restore initial",
+            source_run_ids=("run-four",),
+            author_run_id=author_three_id,
+            restored_from_revision_id=revision_one.id,
+        )
+    finally:
+        ledger.close()
+
+    plane = provider.read_plane(workspace_id=ws_id, company_id=company_id)
+    try:
+        revisions = plane.observe.skill_revisions("ada", skill_id)
+        assert [revision.revision_no for revision in revisions] == [1, 2, 3]
+        assert revisions[1].source_run_refs == ("run-two", "run-three")
+        assert revisions[1].author_run_ref == author_two_id
+        assert revisions[2].restored_from_ref == revision_one.id
+        assert all(revision.created_at is not None for revision in revisions)
+
+        with pytest.raises(UnknownSkillError):
+            plane.observe.skill_revisions("lea", skill_id)
+        with pytest.raises(UnknownSkillError):
+            plane.observe.skill_revisions("nobody", skill_id)
+        with pytest.raises(UnknownSkillError):
+            plane.observe.skill_revisions("ada", "unknown")
+    finally:
+        plane.close()
+
+
 def test_direction_facade_reads_the_goal_tree(
     database_url: str, provider: ControlPlaneProvider
 ) -> None:
