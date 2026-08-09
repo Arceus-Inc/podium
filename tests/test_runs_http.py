@@ -14,7 +14,7 @@ from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.db import tenant_session
 from podium.main import create_app
-from podium.runs import Run, RunStatus, claim_queued_run, finalize_run
+from podium.runs import Run, RunStatus, claim_queued_run, create_run, finalize_run
 from podium.users import create_user
 from podium.workspaces import create_workspace
 
@@ -128,6 +128,54 @@ async def test_canonical_create_hides_another_users_company_in_the_same_workspac
     assert peer_response.status_code == 404
     assert run_count == 0
     assert owner_response.status_code == 202
+    run_id = owner_response.json()["id"]
+    for url in (
+        f"/v1/companies/{company.id}/runs/{run_id}",
+        f"/v1/workspaces/{workspace.id}/companies/{company.id}/runs/{run_id}",
+    ):
+        assert (await api.get(url, headers={"Authorization": f"Bearer {peer_token}"})).status_code == 404
+    for url in (
+        f"/v1/runs/{run_id}/cancel",
+        f"/v1/workspaces/{workspace.id}/companies/{company.id}/runs/{run_id}/cancel",
+    ):
+        assert (await api.post(url, headers={"Authorization": f"Bearer {peer_token}"})).status_code == 404
+
+
+async def test_company_scoped_service_key_cannot_read_or_cancel_another_company_run(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="A", slug="a")
+        allowed_company = await create_company(session, workspace_id=workspace.id, slug="allowed", name="Allowed")
+        target_company = await create_company(session, workspace_id=workspace.id, slug="target", name="Target")
+        _, token = await create_api_key(
+            session, workspace_id=workspace.id, company_id=allowed_company.id, name="scoped-key"
+        )
+    async with tenant_session(sessionmaker, workspace.id) as session:
+        run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=target_company.id,
+            directive="d",
+            idempotency_key="k1",
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    for url in (
+        f"/v1/companies/{target_company.id}/runs/{run.id}",
+        f"/v1/workspaces/{workspace.id}/companies/{target_company.id}/runs/{run.id}",
+    ):
+        assert (await api.get(url, headers=headers)).status_code == 404
+    for url in (
+        f"/v1/runs/{run.id}/cancel",
+        f"/v1/workspaces/{workspace.id}/companies/{target_company.id}/runs/{run.id}/cancel",
+    ):
+        assert (await api.post(url, headers=headers)).status_code == 404
+
+    async with tenant_session(sessionmaker, workspace.id) as session:
+        unchanged = await session.get(Run, run.id)
+    assert unchanged is not None
+    assert unchanged.status == RunStatus.QUEUED
 
 
 async def test_create_run_accepts_deprecated_body_idempotency_key(

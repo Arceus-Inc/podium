@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from podium.runs.models import RunStatus
+
 IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 

@@ -15,7 +15,7 @@ from podium.events._broadcaster import Broadcaster
 from podium.events._stream import event_stream, resolve_stream_actor
 from podium.events.schemas import EventOut, EventPage, EventPageMeta
 from podium.events.service import list_run_events
-from podium.runs import get_run
+from podium.runs import get_visible_run
 
 router = APIRouter(prefix="/v1", tags=["events"])
 
@@ -35,10 +35,61 @@ async def list_events(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> EventPage:
-    if not decide(actor, "read", Resource(kind="run", workspace_id=actor.workspace_id)):
-        raise HTTPException(status_code=403, detail="forbidden")
+    return await _list_events(
+        workspace_id=None,
+        company_id=None,
+        run_id=run_id,
+        after=after,
+        limit=limit,
+        actor=actor,
+        sessionmaker=sessionmaker,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/companies/{company_id}/runs/{run_id}/events", response_model=EventPage
+)
+async def list_events_canonical(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    run_id: uuid.UUID,
+    after: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=_MAX_LIMIT),
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+) -> EventPage:
+    return await _list_events(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        run_id=run_id,
+        after=after,
+        limit=limit,
+        actor=actor,
+        sessionmaker=sessionmaker,
+    )
+
+
+async def _list_events(
+    *,
+    workspace_id: uuid.UUID | None,
+    company_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    after: int,
+    limit: int,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> EventPage:
+    if workspace_id is not None and workspace_id != actor.workspace_id:
+        raise HTTPException(status_code=404, detail="run not found")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_run(session, run_id, user_id=actor.user_id) is None:
+        run = await get_visible_run(session, run_id, user_id=actor.user_id, company_id=company_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        if not decide(
+            actor,
+            "read",
+            Resource(kind="run", workspace_id=actor.workspace_id, company_id=run.company_id),
+        ):
             raise HTTPException(status_code=404, detail="run not found")
         # Fetch one extra to know if a next page exists without a false positive on a full-but-final page.
         rows = await list_run_events(session, run_id, after=after, limit=limit + 1)

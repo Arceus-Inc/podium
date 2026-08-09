@@ -12,7 +12,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,6 +126,21 @@ async def get_run(
     if run is None or await get_company(session, run.company_id, user_id=user_id) is None:
         return None
     return run
+
+
+async def get_visible_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None,
+    company_id: uuid.UUID | None = None,
+) -> Run | None:
+    """Return a run only when its company is visible to this workspace actor."""
+    run = await get_run(session, run_id)
+    if run is None or (company_id is not None and run.company_id != company_id):
+        return None
+    company = await get_company(session, run.company_id, user_id=user_id)
+    return run if company is not None else None
 
 
 async def list_runs(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Run]:

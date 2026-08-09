@@ -24,13 +24,21 @@ from podium.companies import get_company
 from podium.db import tenant_session
 from podium.http_errors import ProblemHTTPException
 from podium.logs import RunLogStore
-from podium.runs.models import TERMINAL_STATUSES
-from podium.runs.schemas import RunCreate, RunOut, RunPage, RunPageLinks, RunPageMeta
+from podium.runs.models import TERMINAL_STATUSES, Run
+from podium.runs.schemas import (
+    IDEMPOTENCY_KEY_MAX_LENGTH,
+    RunCreate,
+    RunOut,
+    RunPage,
+    RunPageLinks,
+    RunPageMeta,
+)
 from podium.runs.service import (
     IdempotencyKeyReuseError,
     RunCursor,
     create_run,
     get_run,
+    get_visible_run,
     list_runs_page,
     request_cancel,
 )
@@ -109,12 +117,19 @@ async def _read_run(
     run_id: uuid.UUID,
     actor: Actor,
     sessionmaker: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID | None = None,
 ) -> RunOut:
-    async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        run = await get_run(session, run_id, user_id=actor.user_id)
-    if run is None or run.company_id != company_id:
-        raise HTTPException(status_code=404, detail="run not found")
-    return RunOut.model_validate(run)
+    return RunOut.model_validate(
+        await _visible_run(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            run_id=run_id,
+            action="read",
+            actor=actor,
+            sessionmaker=sessionmaker,
+        )
+    )
 
 
 @router.post(
@@ -254,7 +269,6 @@ async def get(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunOut:
-    _authorize(actor, "read", company_id)
     return await _read_run(company_id, run_id, actor, sessionmaker)
 
 
@@ -270,8 +284,7 @@ async def get_canonical(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunOut:
-    _authorize(actor, "read", company_id, workspace_id)
-    return await _read_run(company_id, run_id, actor, sessionmaker)
+    return await _read_run(company_id, run_id, actor, sessionmaker, workspace_id=workspace_id)
 
 
 @router.get(
@@ -288,10 +301,15 @@ async def list_canonical(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunPage:
-    _authorize(actor, "read", company_id, workspace_id)
+    if workspace_id != actor.workspace_id:
+        raise HTTPException(status_code=404, detail="company not found")
     _validate_list_query(request)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_company(session, company_id, user_id=actor.user_id) is None:
+        if await get_company(session, company_id, user_id=actor.user_id) is None or not decide(
+            actor,
+            "read",
+            Resource(kind="run", workspace_id=actor.workspace_id, company_id=company_id),
+        ):
             raise HTTPException(status_code=404, detail="company not found")
         rows = await list_runs_page(
             session,
@@ -328,14 +346,36 @@ async def cancel(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunOut:
-    _authorize(actor, "cancel")
-    async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_run(session, run_id, user_id=actor.user_id) is None:
-            raise HTTPException(status_code=404, detail="run not found")
-        await request_cancel(session, run_id)
-        run = await get_run(session, run_id, user_id=actor.user_id)
-        assert run is not None
-        return RunOut.model_validate(run)
+    return RunOut.model_validate(
+        await _cancel_run(
+            workspace_id=None,
+            company_id=None,
+            run_id=run_id,
+            actor=actor,
+            sessionmaker=sessionmaker,
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/companies/{company_id}/runs/{run_id}/cancel", response_model=RunOut
+)
+async def cancel_canonical(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    run_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+) -> RunOut:
+    return RunOut.model_validate(
+        await _cancel_run(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            run_id=run_id,
+            actor=actor,
+            sessionmaker=sessionmaker,
+        )
+    )
 
 
 @router.get("/runs/{run_id}/logs")
@@ -345,13 +385,122 @@ async def logs(
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
     store: RunLogStore = Depends(_get_log_store),
 ) -> Response:
-    """Stream a run's durable transcript from the log store. 404 if the run has produced none."""
-    _authorize(actor, "read")
+    return await _logs(
+        workspace_id=None,
+        company_id=None,
+        run_id=run_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        store=store,
+    )
+
+
+@router.get("/workspaces/{workspace_id}/companies/{company_id}/runs/{run_id}/logs")
+async def logs_canonical(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    run_id: uuid.UUID,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    store: RunLogStore = Depends(_get_log_store),
+) -> Response:
+    return await _logs(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        run_id=run_id,
+        actor=actor,
+        sessionmaker=sessionmaker,
+        store=store,
+    )
+
+
+async def _visible_run(
+    *,
+    workspace_id: uuid.UUID | None,
+    company_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    action: str,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> Run:
+    if workspace_id is not None and workspace_id != actor.workspace_id:
+        raise HTTPException(status_code=404, detail="run not found")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        run = await get_run(session, run_id, user_id=actor.user_id)
-    if run is None or run.log_ref is None or not store.exists(run_id):
+        return await _resolve_visible_run(
+            session,
+            company_id=company_id,
+            run_id=run_id,
+            action=action,
+            actor=actor,
+        )
+
+
+async def _resolve_visible_run(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    action: str,
+    actor: Actor,
+) -> Run:
+    run = await get_visible_run(session, run_id, user_id=actor.user_id, company_id=company_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if not decide(
+        actor,
+        action,
+        Resource(kind="run", workspace_id=actor.workspace_id, company_id=run.company_id),
+    ):
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
+
+
+async def _cancel_run(
+    *,
+    workspace_id: uuid.UUID | None,
+    company_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> Run:
+    if workspace_id is not None and workspace_id != actor.workspace_id:
+        raise HTTPException(status_code=404, detail="run not found")
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        run = await _resolve_visible_run(
+            session,
+            company_id=company_id,
+            run_id=run_id,
+            action="cancel",
+            actor=actor,
+        )
+        await request_cancel(session, run.id)
+        updated = await get_run(session, run.id)
+        if updated is None:
+            raise RuntimeError("cancelled run disappeared before reload")
+        return updated
+
+
+async def _logs(
+    *,
+    workspace_id: uuid.UUID | None,
+    company_id: uuid.UUID | None,
+    run_id: uuid.UUID,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    store: RunLogStore,
+) -> Response:
+    """Stream a run's durable transcript from the log store. 404 if the run has produced none."""
+    run = await _visible_run(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        run_id=run_id,
+        action="read",
+        actor=actor,
+        sessionmaker=sessionmaker,
+    )
+    if run.log_ref is None or not store.exists(run.id):
         raise HTTPException(status_code=404, detail="no logs for this run")
-    data, sha256 = store.load(run_id)  # single read; Starlette sets Content-Length from the bytes
+    data, sha256 = store.load(run.id)  # single read; Starlette sets Content-Length from the bytes
     return Response(
         content=data, media_type="text/plain; charset=utf-8", headers={"X-Log-Sha256": sha256}
     )
