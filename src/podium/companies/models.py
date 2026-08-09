@@ -40,5 +40,6 @@ class Company(Base):
 
     __table_args__ = (
         UniqueConstraint("workspace_id", "slug"),  # slug unique within a workspace
+        UniqueConstraint("id", "workspace_id", name="uq_companies_id_workspace_id"),
         Index("ix_companies_workspace_id", "workspace_id"),  # tenant-prefixed lookups
     )
