@@ -6,6 +6,7 @@ management grants + audit trail); reject leaves the workforce untouched."""
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -282,8 +283,8 @@ async def test_approvals_keep_company_ownership_opaque(
         )
 
     dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
-    _seed_approvals(dsn, str(company.id))
-    path = f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals"
+    approval_id, _, _, _ = _seed_approvals(dsn, str(company.id))
+    path = f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals/{approval_id}"
 
     assert (
         await api.get(path, headers={"Authorization": f"Bearer {owner_token}"})
@@ -294,3 +295,92 @@ async def test_approvals_keep_company_ownership_opaque(
     assert (
         await api.get(path, headers={"Authorization": f"Bearer {foreign_token}"})
     ).status_code == 403
+
+
+def _seed_approval_detail(dsn: str, company_id: str) -> tuple[str, str, str]:
+    from datetime import UTC, datetime, timedelta
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Approval, ApprovalSubjectKind, Ledger
+
+    pending_id, resolved_id, expired_id = mint_id(), mint_id(), mint_id()
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        ledger.approvals.request(
+            Approval(
+                id=pending_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=mint_id(),
+                reason="awaiting approval",
+            )
+        )
+        ledger.approvals.request(
+            Approval(
+                id=resolved_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=mint_id(),
+                reason="already approved",
+            )
+        )
+        ledger.approvals.approve(resolved_id, decided_by_user_id="board-user")
+        ledger.approvals.request(
+            Approval(
+                id=expired_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=mint_id(),
+                reason="timed out",
+                expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+    finally:
+        ledger.close()
+    return pending_id, resolved_id, expired_id
+
+
+async def test_approval_detail_serves_pending_resolved_and_expired(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint(sessionmaker, "approval-detail")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    pending_id, resolved_id, expired_id = _seed_approval_detail(dsn, company_id)
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    pending = await api.get(f"{base}/{pending_id}", headers=headers)
+    resolved = await api.get(f"{base}/{resolved_id}", headers=headers)
+    expired = await api.get(f"{base}/{expired_id}", headers=headers)
+
+    assert pending.status_code == 200
+    assert pending.json()["status"] == "pending"
+    assert resolved.status_code == 200
+    assert resolved.json()["status"] == "approved"
+    assert expired.status_code == 200
+    assert expired.json()["expires_at"] is not None
+    assert all(response.json()["created_at"] is not None for response in (pending, resolved, expired))
+    assert (await api.get(f"{base}/not-a-uuid", headers=headers)).status_code == 404
+    assert (await api.get(f"{base}/{uuid.uuid4()}", headers=headers)).status_code == 404
+
+
+async def test_approval_detail_is_opaque_across_companies(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint(sessionmaker, "approval-detail-a")
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session,
+            workspace_id=uuid.UUID(ws_id),
+            slug="approval-detail-b",
+            name="Approval Detail B",
+        )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id, _, _ = _seed_approval_detail(dsn, company_id)
+
+    response = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{other_company.id}/approvals/{approval_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 404

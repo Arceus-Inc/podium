@@ -6,6 +6,7 @@ management grants, budgets, and the audit trail land atomically or not at all.""
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
@@ -73,7 +74,7 @@ ApprovalSubjectRef: TypeAlias = (
 
 
 class ApprovalView(BaseModel):
-    """One pending human gate, projected directly from Chorus's approval ledger."""
+    """One persisted human gate, projected directly from Chorus's approval ledger."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -84,7 +85,7 @@ class ApprovalView(BaseModel):
     status: ApprovalStatus
     gate_kind: ApprovalGate | None
     expires_at: datetime | None
-    created_at: datetime | None
+    created_at: datetime
 
 
 class PlannedEmployeeView(BaseModel):
@@ -177,6 +178,13 @@ def _subject_view(approval: Approval) -> ApprovalSubjectRef:
             return BudgetIncidentSubjectRef(id=approval.subject_id)
 
 
+def _require_created_at(approval: Approval) -> datetime:
+    """Chorus assigns every persisted approval a creation timestamp."""
+    if approval.created_at is None:
+        raise RuntimeError(f"persisted approval {approval.id!r} has no created_at")
+    return approval.created_at
+
+
 def _approval_view(approval: Approval) -> ApprovalView:
     return ApprovalView(
         id=approval.id,
@@ -186,7 +194,7 @@ def _approval_view(approval: Approval) -> ApprovalView:
         status=approval.status,
         gate_kind=approval.gate_kind,
         expires_at=approval.expires_at,
-        created_at=approval.created_at,
+        created_at=_require_created_at(approval),
     )
 
 
@@ -215,6 +223,15 @@ class GovernanceFacade:
     def pending_approvals(self) -> list[ApprovalView]:
         """Open approval gates, oldest first; Chorus excludes expired gates itself."""
         return [_approval_view(approval) for approval in self._ledger.approvals.pending()]
+
+    def approval(self, approval_id: str) -> ApprovalView | None:
+        """One persisted gate in this company, whatever its status."""
+        try:
+            uuid.UUID(approval_id)
+        except ValueError:
+            return None
+        approval = self._ledger.approvals.get(approval_id)
+        return _approval_view(approval) if approval is not None else None
 
     def approve(self, plan_id: str, *, by: str) -> PlanView:
         """Atomically materialize the latest valid proposal as an audited human decision."""

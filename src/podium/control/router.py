@@ -459,6 +459,28 @@ async def approvals(
     )
 
 
+@router.get("/approvals/{approval_id}", response_model=ApprovalView)
+async def approval(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    approval_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> ApprovalView:
+    """One persisted gate, including resolved and expired records."""
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    view = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.governance.approval(approval_id),
+    )
+    if view is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return view
+
+
 @router.get("/plans", response_model=list[PlanView])
 async def workforce_plans(
     workspace_id: uuid.UUID,
