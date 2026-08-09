@@ -6,8 +6,21 @@ management grants, budgets, and the audit trail land atomically or not at all.""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from chorus.governance import ApprovalDecision, GovernanceResolver, HumanAuthorization
+from chorus.ledger import (
+    Approval,
+    ApprovalAction,
+    ApprovalGate,
+    ApprovalStatus,
+    ApprovalSubjectKind,
+    AuthenticationMethod,
+    AuthorizationVerdict,
+    HumanAuthorizationProof,
+)
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
@@ -21,6 +34,80 @@ class UnknownPlanError(ValueError):
 
 class PlanConflictError(ValueError):
     """The plan is not in a decidable state (already applied/rejected/superseded)."""
+
+
+class TaskSubjectRef(BaseModel):
+    """The task an approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["task"] = "task"
+    id: str
+
+
+class ArtifactSubjectRef(BaseModel):
+    """The artifact an approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["artifact"] = "artifact"
+    id: str
+
+
+class EmployeeSubjectRef(BaseModel):
+    """The employee a hire approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["employee"] = "employee"
+    id: str
+
+
+class BudgetIncidentSubjectRef(BaseModel):
+    """The budget incident an override approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["budget_incident"] = "budget_incident"
+    id: str
+
+
+ApprovalSubjectRef: TypeAlias = (
+    TaskSubjectRef | ArtifactSubjectRef | EmployeeSubjectRef | BudgetIncidentSubjectRef
+)
+
+
+class ApprovalView(BaseModel):
+    """One persisted human gate, projected directly from Chorus's approval ledger."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    subject: ApprovalSubjectRef
+    reason: str
+    action: ApprovalAction
+    status: ApprovalStatus
+    gate_kind: ApprovalGate | None
+    decided_by_user_id: str | None
+    decided_at: datetime | None
+    expires_at: datetime | None
+    created_at: datetime
+
+
+class ApprovalDecisionView(BaseModel):
+    """Immutable evidence for one authenticated human approval decision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    decision_id: str
+    approval_id: str
+    user_id: str
+    method: AuthenticationMethod
+    authenticated_at: datetime
+    decided_at: datetime
+    request_id: str
+    request_hash: str
+    verdict: AuthorizationVerdict
 
 
 class PlannedEmployeeView(BaseModel):
@@ -101,6 +188,54 @@ def _view(plan: WorkforcePlan) -> PlanView:
     )
 
 
+def _subject_view(approval: Approval) -> ApprovalSubjectRef:
+    match approval.subject_kind:
+        case ApprovalSubjectKind.TASK:
+            return TaskSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.ARTIFACT:
+            return ArtifactSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.EMPLOYEE:
+            return EmployeeSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.BUDGET_INCIDENT:
+            return BudgetIncidentSubjectRef(id=approval.subject_id)
+
+
+def _require_created_at(approval: Approval) -> datetime:
+    """Chorus assigns every persisted approval a creation timestamp."""
+    if approval.created_at is None:
+        raise RuntimeError(f"persisted approval {approval.id!r} has no created_at")
+    return approval.created_at
+
+
+def _approval_view(approval: Approval) -> ApprovalView:
+    return ApprovalView(
+        id=approval.id,
+        subject=_subject_view(approval),
+        reason=approval.reason,
+        action=approval.action,
+        status=approval.status,
+        gate_kind=approval.gate_kind,
+        decided_by_user_id=approval.decided_by_user_id,
+        decided_at=approval.decided_at,
+        expires_at=approval.expires_at,
+        created_at=_require_created_at(approval),
+    )
+
+
+def _decision_view(proof: HumanAuthorizationProof) -> ApprovalDecisionView:
+    return ApprovalDecisionView(
+        decision_id=proof.decision_id,
+        approval_id=proof.approval_id,
+        user_id=proof.user_id,
+        method=proof.method,
+        authenticated_at=proof.authenticated_at,
+        decided_at=proof.decided_at,
+        request_id=proof.request_id,
+        request_hash=proof.request_hash,
+        verdict=proof.verdict,
+    )
+
+
 class GovernanceFacade:
     """Pure delegation to the engine's plan service; translation, never business logic."""
 
@@ -122,6 +257,45 @@ class GovernanceFacade:
     def plans(self) -> list[PlanView]:
         """Every persisted plan revision, newest last — proposed ones are the pending inbox."""
         return [_view(plan) for plan in self._ledger.workforce_plans.list()]
+
+    def pending_approvals(self) -> list[ApprovalView]:
+        """Open approval gates, oldest first; Chorus excludes expired gates itself."""
+        return [_approval_view(approval) for approval in self._ledger.approvals.pending()]
+
+    def approval(self, approval_id: str) -> ApprovalView | None:
+        """One persisted gate in this company, whatever its status."""
+        try:
+            uuid.UUID(approval_id)
+        except ValueError:
+            return None
+        approval = self._ledger.approvals.get(approval_id)
+        return _approval_view(approval) if approval is not None else None
+
+    def authorization_proof_by_nonce(self, nonce: str) -> ApprovalDecisionView | None:
+        """Read a tenant-scoped, immutable decision proof by its derived idempotency nonce."""
+        proof = GovernanceResolver(self._ledger).get_authorization_proof_by_nonce(nonce)
+        return _decision_view(proof) if proof is not None else None
+
+    def decide_approval(
+        self,
+        approval_id: str,
+        *,
+        verdict: Literal["approve", "deny", "request_revision", "hold"],
+        authorization: HumanAuthorization,
+    ) -> ApprovalDecisionView:
+        """Use Chorus's authenticated public governance API for a generic approval verdict."""
+        resolver = GovernanceResolver(self._ledger)
+        if verdict == "hold":
+            return _decision_view(resolver.hold_authenticated(approval_id, authorization=authorization))
+        resolver.resolve_authenticated(
+            approval_id,
+            decision=ApprovalDecision(verdict),
+            authorization=authorization,
+        )
+        proof = resolver.get_authorization_proof_by_nonce(authorization.nonce)
+        if proof is None:
+            raise RuntimeError("authenticated approval decision did not persist a proof")
+        return _decision_view(proof)
 
     def approve(self, plan_id: str, *, by: str) -> PlanView:
         """Atomically materialize the latest valid proposal as an audited human decision."""
@@ -155,6 +329,8 @@ class GovernanceFacade:
 
 
 __all__ = [
+    "ApprovalDecisionView",
+    "ApprovalView",
     "GovernanceFacade",
     "ManagementGrantView",
     "PlanConflictError",

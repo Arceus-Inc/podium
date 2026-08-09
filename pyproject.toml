@@ -40,6 +40,7 @@ dev = [
 # ponytail: path deps; switch to git refs when this deploys off this machine.
 [tool.uv.sources]
 dream = { path = "../dream", editable = true }
+# Authenticated generic approval decisions require Chorus PR #115 (commit 7fdc2ac)'s durable proof API.
 chorus = { path = "../chorus", editable = true }
 lattice = { path = "../lattice", editable = true }
 horizon = { path = "../horizon", editable = true }
