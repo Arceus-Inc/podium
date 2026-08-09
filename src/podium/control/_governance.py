@@ -84,6 +84,8 @@ class ApprovalView(BaseModel):
     action: ApprovalAction
     status: ApprovalStatus
     gate_kind: ApprovalGate | None
+    decided_by_user_id: str | None
+    decided_at: datetime | None
     expires_at: datetime | None
     created_at: datetime
 
@@ -193,6 +195,8 @@ def _approval_view(approval: Approval) -> ApprovalView:
         action=approval.action,
         status=approval.status,
         gate_kind=approval.gate_kind,
+        decided_by_user_id=approval.decided_by_user_id,
+        decided_at=approval.decided_at,
         expires_at=approval.expires_at,
         created_at=_require_created_at(approval),
     )

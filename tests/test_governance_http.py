@@ -356,6 +356,8 @@ async def test_approval_detail_serves_pending_resolved_and_expired(
     assert pending.json()["status"] == "pending"
     assert resolved.status_code == 200
     assert resolved.json()["status"] == "approved"
+    assert resolved.json()["decided_by_user_id"] == "board-user"
+    assert resolved.json()["decided_at"] is not None
     assert expired.status_code == 200
     assert expired.json()["expires_at"] is not None
     assert all(response.json()["created_at"] is not None for response in (pending, resolved, expired))
@@ -410,6 +412,14 @@ async def test_approval_detail_etag_revalidates_and_tracks_state(
     assert matched.content == b""
     assert matched.headers["etag"] == first.headers["etag"]
 
+    normal_syntax = await api.get(
+        path,
+        headers={**headers, "If-None-Match": f'"other", W/{first.headers["etag"]}'},
+    )
+    assert normal_syntax.status_code == 304
+    assert normal_syntax.content == b""
+    assert (await api.get(path, headers={**headers, "If-None-Match": "*"})).status_code == 304
+
     nonmatching = await api.get(path, headers={**headers, "If-None-Match": '"different"'})
     assert nonmatching.status_code == 200
     assert nonmatching.json()["id"] == approval_id
@@ -423,4 +433,6 @@ async def test_approval_detail_etag_revalidates_and_tracks_state(
     changed = await api.get(path, headers=headers)
     assert changed.status_code == 200
     assert changed.json()["status"] == "approved"
+    assert changed.json()["decided_by_user_id"] == "board-user"
+    assert changed.json()["decided_at"] is not None
     assert changed.headers["etag"] != first.headers["etag"]

@@ -467,6 +467,14 @@ def _approval_etag(view: ApprovalView) -> str:
     return f'"{hashlib.sha256(payload.encode()).hexdigest()}"'
 
 
+def _if_none_match_matches(value: str | None, etag: str) -> bool:
+    if value is None:
+        return False
+    return value.strip() == "*" or any(
+        validator.strip().removeprefix("W/") == etag for validator in value.split(",")
+    )
+
+
 @router.get("/approvals/{approval_id}", response_model=ApprovalView)
 async def approval(
     workspace_id: uuid.UUID,
@@ -489,7 +497,7 @@ async def approval(
     if view is None:
         raise HTTPException(status_code=404, detail="approval not found")
     etag = _approval_etag(view)
-    if request.headers.get("if-none-match") == etag:
+    if _if_none_match_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
     return view
