@@ -37,6 +37,16 @@ from podium.runs.service import (
 
 router = APIRouter(prefix="/v1", tags=["runs"])
 
+IdempotencyKeyHeader = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        description="Preferred idempotency key for run creation; the request-body alias is deprecated.",
+        min_length=1,
+        max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
+    ),
+]
+
 
 def _authorize(
     actor: Actor,
@@ -128,18 +138,69 @@ async def create(
     company_id: uuid.UUID,
     body: RunCreate,
     response: Response,
-    header_idempotency_key: Annotated[
-        str | None,
-        Header(
-            alias="Idempotency-Key",
-            description="Preferred idempotency key for run creation; the request-body alias is deprecated.",
-            min_length=1,
-            max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
-        ),
-    ] = None,
+    header_idempotency_key: IdempotencyKeyHeader = None,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunOut:
+    return await _create_run(
+        workspace_id=None,
+        company_id=company_id,
+        body=body,
+        response=response,
+        header_idempotency_key=header_idempotency_key,
+        actor=actor,
+        sessionmaker=sessionmaker,
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/companies/{company_id}/runs",
+    status_code=202,
+    response_model=RunOut,
+    responses={
+        200: {
+            "model": RunOut,
+            "headers": {
+                "Idempotency-Replayed": {
+                    "description": "True when this terminal run is an idempotent replay.",
+                    "schema": {"type": "boolean"},
+                }
+            },
+        }
+    },
+)
+async def create_canonical(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    body: RunCreate,
+    response: Response,
+    header_idempotency_key: IdempotencyKeyHeader = None,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+) -> RunOut:
+    return await _create_run(
+        workspace_id=workspace_id,
+        company_id=company_id,
+        body=body,
+        response=response,
+        header_idempotency_key=header_idempotency_key,
+        actor=actor,
+        sessionmaker=sessionmaker,
+    )
+
+
+async def _create_run(
+    *,
+    workspace_id: uuid.UUID | None,
+    company_id: uuid.UUID,
+    body: RunCreate,
+    response: Response,
+    header_idempotency_key: str | None,
+    actor: Actor,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> RunOut:
+    if workspace_id is not None and workspace_id != actor.workspace_id:
+        raise HTTPException(status_code=404, detail="company not found")
     body_idempotency_key = body.idempotency_key
     if (
         header_idempotency_key is not None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from uuid import uuid4
 
 import httpx
 import pytest_asyncio
@@ -27,7 +28,7 @@ async def api(
         yield client
 
 
-async def _setup(admin: async_sessionmaker[AsyncSession]) -> tuple[str, str, str]:
+async def _setup(admin: async_sessionmaker[AsyncSession]) -> tuple[str, str, str, str]:
     """Workspace A with a company and a key; plus company B in another workspace."""
     async with admin() as s, s.begin():
         a = await create_workspace(s, name="A", slug="a")
@@ -35,23 +36,61 @@ async def _setup(admin: async_sessionmaker[AsyncSession]) -> tuple[str, str, str
         a_company = await create_company(s, workspace_id=a.id, slug="ac", name="A Co")
         b_company = await create_company(s, workspace_id=b.id, slug="bc", name="B Co")
         _, token_a = await create_api_key(s, workspace_id=a.id, name="A key")
-        return token_a, a_company.id, b_company.id
+        return token_a, a.id, a_company.id, b_company.id
 
 
 async def test_create_run_is_idempotent_over_http(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
     first = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     assert first.status_code == 202, first.text
     assert first.json()["status"] == "queued"
 
 
+async def test_canonical_create_matches_legacy_idempotency_behavior(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, workspace_id, a_company, _b = await _setup(sessionmaker)
+    url = f"/v1/workspaces/{workspace_id}/companies/{a_company}/runs"
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
+    created = await api.post(url, json={"directive": "ship it"}, headers=headers)
+    replay = await api.post(url, json={"directive": "ship it"}, headers=headers)
+    assert created.status_code == 202
+    assert replay.status_code == 409
+    assert replay.json()["type"] == "urn:podium:problem:idempotency_in_progress"
+    assert replay.headers["Retry-After"] == "1"
+
+
+async def test_canonical_create_hides_company_for_a_different_workspace_path(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/workspaces/{uuid4()}/companies/{a_company}/runs",
+        json={"directive": "ship it"},
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"},
+    )
+    assert response.status_code == 404
+
+
+async def test_canonical_create_hides_foreign_company_owner(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, workspace_id, _a_company, b_company = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/workspaces/{workspace_id}/companies/{b_company}/runs",
+        json={"directive": "ship it"},
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"},
+    )
+    assert response.status_code == 404
+
+
 async def test_create_run_accepts_deprecated_body_idempotency_key(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     response = await api.post(
         f"/v1/companies/{a_company}/runs",
         json={"directive": "ship it", "idempotency_key": "k1"},
@@ -63,7 +102,7 @@ async def test_create_run_accepts_deprecated_body_idempotency_key(
 async def test_create_run_rejects_missing_or_conflicting_idempotency_keys(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}"}
     missing = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     conflicting = await api.post(
@@ -78,7 +117,7 @@ async def test_create_run_rejects_missing_or_conflicting_idempotency_keys(
 async def test_create_run_rejects_idempotency_keys_over_the_shared_limit(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     too_long = "k" * 129
     url = f"/v1/companies/{a_company}/runs"
     header = await api.post(
@@ -98,7 +137,7 @@ async def test_create_run_rejects_idempotency_keys_over_the_shared_limit(
 async def test_in_progress_idempotency_replay_returns_problem_and_retry_after(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
     created = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     replay = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
@@ -113,7 +152,7 @@ async def test_completed_idempotency_replay_returns_existing_resource(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
     created = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     run_id = created.json()["id"]
@@ -130,7 +169,7 @@ async def test_completed_idempotency_replay_returns_existing_resource(
 async def test_idempotency_key_reuse_returns_problem(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
     await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     reuse = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "change scope"}, headers=headers)
@@ -150,12 +189,19 @@ async def test_run_idempotency_openapi_documents_header_and_body_deprecation(
     assert body_schema["properties"]["idempotency_key"]["deprecated"] is True
     assert body_schema["properties"]["idempotency_key"]["anyOf"][0]["maxLength"] == 128
     assert "Idempotency-Replayed" in operation["responses"]["200"]["headers"]
+    canonical = schema["paths"]["/v1/workspaces/{workspace_id}/companies/{company_id}/runs"][
+        "post"
+    ]
+    canonical_header = next(
+        parameter for parameter in canonical["parameters"] if parameter["name"] == "Idempotency-Key"
+    )
+    assert canonical_header["in"] == "header"
 
 
 async def test_get_run_returns_status(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}"}
     created = await api.post(
         f"/v1/companies/{a_company}/runs",
@@ -171,7 +217,7 @@ async def test_get_run_returns_status(
 async def test_cancel_moves_run_to_canceling(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     headers = {"Authorization": f"Bearer {token}"}
     created = await api.post(
         f"/v1/companies/{a_company}/runs",
@@ -187,7 +233,7 @@ async def test_cancel_moves_run_to_canceling(
 async def test_run_creation_on_foreign_company_is_not_found(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, _a, b_company = await _setup(sessionmaker)
+    token, _workspace_id, _a, b_company = await _setup(sessionmaker)
     # A's key targeting B's company — RLS hides B's company from A's session → 404, no run made.
     resp = await api.post(
         f"/v1/companies/{b_company}/runs",
@@ -200,7 +246,7 @@ async def test_run_creation_on_foreign_company_is_not_found(
 async def test_runs_require_authentication(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    _token, a_company, _b = await _setup(sessionmaker)
+    _token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     resp = await api.get(f"/v1/companies/{a_company}/runs/run_whatever")
     assert resp.status_code == 401
 
@@ -210,7 +256,7 @@ async def test_create_run_with_delegation_params(
 ) -> None:
     """CP-3: one run resource, execution_mode discriminates (M4 §3.3) — delegation params are
     stored durably on the run and echoed back; the conductor threads them into org.submit."""
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     response = await api.post(
         f"/v1/companies/{a_company}/runs",
         headers={"Authorization": f"Bearer {token}"},
@@ -272,7 +318,7 @@ async def test_run_openapi_uses_named_typed_nested_schemas(api: httpx.AsyncClien
 async def test_create_run_delegation_requires_lead_and_goal(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     response = await api.post(
         f"/v1/companies/{a_company}/runs",
         headers={"Authorization": f"Bearer {token}"},
