@@ -141,6 +141,12 @@ async def _timed_out_wait(awaitable: Coroutine[object, object, object], timeout:
     raise TimeoutError
 
 
+async def _immediate_wait(awaitable: Coroutine[object, object, object], timeout: float) -> object:
+    del timeout
+    awaitable.close()
+    return object()
+
+
 async def _wait_for_subscription(bus: _EventBus) -> None:
     for _ in range(10):
         if bus.subscription_count:
@@ -170,7 +176,13 @@ async def test_product_cancellation_cancels_the_engine_task_before_returning_can
 async def test_timeout_cancels_the_engine_task_before_returning_timed_out() -> None:
     executor, chorus, _host = _executor(_Task("target", TaskStatus.IN_PROGRESS))
 
-    with patch("asyncio.wait_for", new=_timed_out_wait):
+    with (
+        patch("asyncio.wait_for", new=_timed_out_wait),
+        patch(
+            "podium.conductor._chorus_executor.monotonic",
+            side_effect=(0.0, 0.0, 0.0, 1.0),
+        ),
+    ):
         result = await executor.execute(
             run_id=uuid.uuid4(),
             workspace_id=uuid.uuid4(),
@@ -265,6 +277,29 @@ async def test_nonterminal_task_events_do_not_consume_the_timeout_budget() -> No
 
     result = await asyncio.wait_for(run, timeout=0.1)
     assert result.status is RunStatus.SUCCEEDED
+
+
+async def test_immediate_nonterminal_wakes_cannot_extend_the_deadline() -> None:
+    executor, chorus, _host = _executor(_Task("target", TaskStatus.IN_PROGRESS), max_ticks=1)
+
+    with (
+        patch("asyncio.wait_for", new=_immediate_wait),
+        patch(
+            "podium.conductor._chorus_executor.monotonic",
+            side_effect=(0.0, 0.0, 0.0, 0.5, 0.5, 1.0),
+        ),
+    ):
+        result = await executor.execute(
+            run_id=uuid.uuid4(),
+            workspace_id=uuid.uuid4(),
+            company_id=uuid.uuid4(),
+            directive="d",
+            is_canceled=_not_canceled,
+            engine_task_id="target",
+        )
+
+    assert result.status is RunStatus.TIMED_OUT
+    assert chorus.cancelled_task_ids == ["target"]
 
 
 async def test_unrelated_events_do_not_wake_a_terminal_task() -> None:

@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any, Protocol, cast
 
 import structlog
@@ -387,7 +388,7 @@ class ChorusRunExecutor:
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
-        remaining_ticks = self._max_ticks if self._max_ticks > 0 else None
+        deadline = monotonic() + self._max_ticks if self._max_ticks > 0 else None
         terminal_event = asyncio.Event()
         loop = asyncio.get_running_loop()
 
@@ -410,16 +411,18 @@ class ChorusRunExecutor:
 
         unsubscribe = runtime.graph.org._event_bus.subscribe(wake_for_task_event)
         try:
-            while remaining_ticks is None or remaining_ticks > 0:
+            while deadline is None or monotonic() < deadline:
                 if (terminal := terminal_result()) is not None:
                     return terminal
                 if await is_canceled():
                     return cancel_or_terminal(ExecutionResult(status=RunStatus.CANCELED))
+                timeout = 1.0 if deadline is None else min(1.0, max(0.0, deadline - monotonic()))
+                if timeout == 0:
+                    break
                 try:
-                    await asyncio.wait_for(terminal_event.wait(), timeout=1.0)
+                    await asyncio.wait_for(terminal_event.wait(), timeout=timeout)
                 except TimeoutError:
-                    if remaining_ticks is not None:
-                        remaining_ticks -= 1
+                    pass
                 finally:
                     terminal_event.clear()
             if (terminal := terminal_result()) is not None:
