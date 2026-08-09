@@ -14,14 +14,7 @@ class StreamTicketView(BaseModel):
     expires_at: datetime
 
 
-class StreamTicketLinks(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    stream: str
-
-
 class StreamTicketCreateEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     data: StreamTicketView
-    links: StreamTicketLinks

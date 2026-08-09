@@ -54,7 +54,7 @@ async def test_canonical_stream_ticket_mint_returns_ticket_once_and_persists_onl
     assert "location" not in response.headers
     assert response.headers["Cache-Control"] == "no-store"
     envelope = StreamTicketCreateEnvelope.model_validate(response.json())
-    assert envelope.links.stream == f"/v1/workspaces/{workspace.id}/companies/{company.id}/stream"
+    assert "links" not in response.json()
     assert envelope.data.expires_at.utcoffset() == timedelta()
 
     async with sessionmaker() as session:

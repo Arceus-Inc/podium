@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import DateTime, bindparam, delete, insert, select, text
+from sqlalchemy import delete, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.stream_tickets.models import StreamTicket
@@ -37,9 +37,7 @@ async def create_stream_ticket(
     actor_type: str,
     actor_id: uuid.UUID,
     ticket_hash: str,
-    created_at: datetime,
 ) -> CreatedStreamTicketRow:
-    created_at_param = bindparam("created_at", type_=DateTime(timezone=True))
     stmt = (
         insert(StreamTicket)
         .values(
@@ -48,12 +46,12 @@ async def create_stream_ticket(
             actor_type=actor_type,
             actor_id=actor_id,
             ticket_hash=ticket_hash,
-            created_at=created_at_param,
-            expires_at=created_at_param + text("interval '60 seconds'"),
+            created_at=text("statement_timestamp()"),
+            expires_at=text("statement_timestamp() + interval '60 seconds'"),
         )
         .returning(StreamTicket.id, StreamTicket.created_at, StreamTicket.expires_at)
     )
-    row = (await session.execute(stmt, {"created_at": created_at})).one()
+    row = (await session.execute(stmt)).one()
     return CreatedStreamTicketRow(id=row.id, created_at=row.created_at, expires_at=row.expires_at)
 
 
@@ -63,7 +61,6 @@ async def redeem_stream_ticket(
     ticket_hash: str,
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
-    now: datetime,
 ) -> RedeemedStreamTicketRow | None:
     stmt = (
         delete(StreamTicket)
@@ -71,7 +68,7 @@ async def redeem_stream_ticket(
             StreamTicket.ticket_hash == ticket_hash,
             StreamTicket.workspace_id == workspace_id,
             StreamTicket.company_id == company_id,
-            StreamTicket.expires_at > now,
+            StreamTicket.expires_at > text("statement_timestamp()"),
         )
         .returning(
             StreamTicket.id,
@@ -89,7 +86,7 @@ async def redeem_stream_ticket(
                 StreamTicket.ticket_hash == ticket_hash,
                 StreamTicket.workspace_id == workspace_id,
                 StreamTicket.company_id == company_id,
-                StreamTicket.expires_at <= now,
+                StreamTicket.expires_at <= text("statement_timestamp()"),
             )
         )
         return None
@@ -109,7 +106,6 @@ async def delete_expired_stream_tickets(
     *,
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
-    now: datetime,
     limit: int,
 ) -> int:
     expired_ids = (
@@ -117,7 +113,7 @@ async def delete_expired_stream_tickets(
         .where(
             StreamTicket.workspace_id == workspace_id,
             StreamTicket.company_id == company_id,
-            StreamTicket.expires_at <= now,
+            StreamTicket.expires_at <= text("statement_timestamp()"),
         )
         .order_by(StreamTicket.expires_at)
         .limit(limit)

@@ -12,7 +12,6 @@ from podium.companies import get_company
 from podium.db import tenant_session
 from podium.stream_tickets.schemas import (
     StreamTicketCreateEnvelope,
-    StreamTicketLinks,
     StreamTicketView,
 )
 from podium.stream_tickets.service import mint_stream_ticket
@@ -50,7 +49,4 @@ async def create(
     response.headers["Cache-Control"] = "no-store"
     return StreamTicketCreateEnvelope(
         data=StreamTicketView(ticket=minted.ticket, expires_at=minted.expires_at),
-        links=StreamTicketLinks(
-            stream=f"/v1/workspaces/{workspace_id}/companies/{company_id}/stream"
-        ),
     )

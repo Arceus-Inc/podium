@@ -7,7 +7,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,10 +23,6 @@ from podium.stream_tickets.repository import (
 _STREAM_TICKET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
 _STREAM_TICKET_CLEANUP_LIMIT = 128
 STREAM_TICKET_TTL_SECONDS = 60
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
 
 
 def generate_stream_ticket() -> str:
@@ -61,13 +57,15 @@ async def mint_stream_ticket(
     company_id: uuid.UUID,
     actor: Actor,
 ) -> MintedStreamTicket:
-    now = _now()
     ticket = generate_stream_ticket()
+    if actor.workspace_id != workspace_id:
+        raise ValueError("actor workspace does not match ticket workspace")
+    if actor.company_id is not None and actor.company_id != company_id:
+        raise ValueError("actor company does not match ticket company")
     await delete_expired_stream_tickets(
         session,
         workspace_id=workspace_id,
         company_id=company_id,
-        now=now,
         limit=_STREAM_TICKET_CLEANUP_LIMIT,
     )
     created = await create_stream_ticket(
@@ -77,7 +75,6 @@ async def mint_stream_ticket(
         actor_type=actor.actor_type,
         actor_id=actor.actor_id,
         ticket_hash=hash_stream_ticket(ticket),
-        created_at=now,
     )
     return MintedStreamTicket(ticket=ticket, expires_at=created.expires_at)
 
@@ -96,7 +93,6 @@ async def redeem_stream_ticket(
         ticket_hash=hash_stream_ticket(ticket),
         workspace_id=workspace_id,
         company_id=company_id,
-        now=_now(),
     )
     if redeemed is None:
         return None

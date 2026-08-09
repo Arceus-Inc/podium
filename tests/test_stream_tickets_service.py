@@ -6,7 +6,9 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import Actor, create_api_key, resolve_actor
@@ -102,10 +104,14 @@ async def test_stream_ticket_expiry_blocks_redemption(
             session, workspace_id=workspace_id, company_id=company_id, actor=owner
         )
     async with sessionmaker() as session, session.begin():
+        expired_created_at = datetime.now(UTC) - timedelta(seconds=120)
         await session.execute(
             update(StreamTicket)
             .where(StreamTicket.ticket_hash == hash_stream_ticket(minted.ticket))
-            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            .values(
+                created_at=expired_created_at,
+                expires_at=expired_created_at + timedelta(seconds=60),
+            )
         )
     async with tenant_session(app_sessionmaker, workspace_id) as session:
         redeemed = await redeem_stream_ticket(
@@ -248,3 +254,77 @@ async def test_stream_ticket_row_is_rls_scoped_to_the_tenant(
         rows = (await session.execute(select(StreamTicket.id))).scalars().all()
 
     assert rows == []
+
+
+async def test_mint_rejects_actor_scope_that_would_widen_authority(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, owner_token, _peer_token = await _seed_owned_company(sessionmaker)
+    owner = await _actor_from_token(sessionmaker, owner_token)
+    other_workspace = uuid.uuid4()
+    other_company = uuid.uuid4()
+
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        with pytest.raises(ValueError, match="workspace"):
+            await mint_stream_ticket(
+                session,
+                workspace_id=other_workspace,
+                company_id=company_id,
+                actor=owner,
+            )
+        with pytest.raises(ValueError, match="company"):
+            await mint_stream_ticket(
+                session,
+                workspace_id=workspace_id,
+                company_id=other_company,
+                actor=Actor(
+                    workspace_id=owner.workspace_id,
+                    company_id=company_id,
+                    actor_type=owner.actor_type,
+                    actor_id=owner.actor_id,
+                ),
+            )
+        count = await session.scalar(select(func.count()).select_from(StreamTicket))
+
+    assert count == 0
+
+
+async def test_app_role_cannot_mutate_ticket_ttl(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, owner_token, _peer_token = await _seed_owned_company(sessionmaker)
+    owner = await _actor_from_token(sessionmaker, owner_token)
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        minted = await mint_stream_ticket(
+            session, workspace_id=workspace_id, company_id=company_id, actor=owner
+        )
+
+    with pytest.raises(ProgrammingError):
+        async with tenant_session(app_sessionmaker, workspace_id) as session:
+            await session.execute(
+                update(StreamTicket)
+                .where(StreamTicket.ticket_hash == hash_stream_ticket(minted.ticket))
+                .values(expires_at=datetime.now(UTC))
+            )
+
+
+async def test_ticket_ttl_constraint_rejects_non_exact_updates(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, owner_token, _peer_token = await _seed_owned_company(sessionmaker)
+    owner = await _actor_from_token(sessionmaker, owner_token)
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        minted = await mint_stream_ticket(
+            session, workspace_id=workspace_id, company_id=company_id, actor=owner
+        )
+
+    with pytest.raises(IntegrityError):
+        async with sessionmaker() as session, session.begin():
+            await session.execute(
+                update(StreamTicket)
+                .where(StreamTicket.ticket_hash == hash_stream_ticket(minted.ticket))
+                .values(expires_at=datetime.now(UTC))
+            )

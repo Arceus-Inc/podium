@@ -38,6 +38,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "char_length(ticket_hash) = 64", name="ck_stream_tickets_ticket_hash_length"
         ),
+        sa.CheckConstraint(
+            "expires_at = created_at + interval '60 seconds'",
+            name="ck_stream_tickets_exact_ttl",
+        ),
         sa.ForeignKeyConstraint(
             ["workspace_id"],
             ["workspaces.id"],
@@ -63,7 +67,7 @@ def upgrade() -> None:
         "stream_tickets",
         ["workspace_id", "company_id", "expires_at"],
     )
-    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON stream_tickets TO podium_app")
+    op.execute("GRANT SELECT, INSERT, DELETE ON stream_tickets TO podium_app")
     op.execute("ALTER TABLE stream_tickets ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE stream_tickets FORCE ROW LEVEL SECURITY")
     op.execute(
