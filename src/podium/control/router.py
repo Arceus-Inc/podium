@@ -12,7 +12,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, TypeVar
 from urllib.parse import urlencode
 
@@ -486,7 +486,7 @@ class ApprovalDetail(BaseModel):
 
 
 def _approval_cursor(created_at: datetime, approval_id: str) -> str:
-    value = f"{created_at.isoformat()}|{approval_id}".encode()
+    value = f"{created_at.astimezone(UTC).isoformat()}|{approval_id}".encode()
     return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 
@@ -496,19 +496,27 @@ def _cursor_key(cursor: str) -> tuple[datetime, str]:
         created_at_text, separator, approval_id = base64.b64decode(
             padded.encode("ascii"), altchars=b"-_", validate=True
         ).decode().partition("|")
-        created_at = datetime.fromisoformat(created_at_text)
+        created_at = datetime.fromisoformat(created_at_text.replace("Z", "+00:00"))
         canonical_id = str(uuid.UUID(approval_id))
     except (UnicodeDecodeError, ValueError, binascii.Error):
         raise HTTPException(status_code=422, detail="invalid cursor") from None
     if (
         not separator
         or "|" in approval_id
-        or created_at.tzinfo is None
+        or created_at.utcoffset() != timedelta()
         or canonical_id != approval_id
-        or _approval_cursor(created_at, approval_id) != cursor
+        or cursor
+        not in {
+            _approval_cursor(created_at, approval_id),
+            base64.urlsafe_b64encode(
+                f"{created_at.astimezone(UTC).isoformat().replace('+00:00', 'Z')}|{approval_id}".encode()
+            )
+            .decode()
+            .rstrip("="),
+        }
     ):
         raise HTTPException(status_code=422, detail="invalid cursor")
-    return created_at, approval_id
+    return created_at.astimezone(UTC), approval_id
 
 
 def _approval_page(
@@ -539,7 +547,7 @@ async def approvals(
     company_id: uuid.UUID,
     request: Request,
     status: Literal["pending"] = "pending",
-    cursor: str | None = None,
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
@@ -550,6 +558,7 @@ async def approvals(
     if set(request.query_params) - {"status", "cursor", "limit"}:
         raise HTTPException(status_code=422, detail="unsupported query parameter")
     await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    # ponytail: pending() snapshots all gates; add a native bounded keyset query if volume warrants it.
     pending = await _plane_read(
         provider,
         workspace_id=workspace_id,

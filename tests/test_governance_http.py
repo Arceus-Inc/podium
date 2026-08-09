@@ -6,12 +6,15 @@ management grants + audit trail); reject leaves the workforce untouched."""
 
 from __future__ import annotations
 
+import base64
 import uuid
 from collections.abc import AsyncIterator
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
+import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
@@ -19,7 +22,7 @@ from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
 from podium.control._governance import ApprovalView, TaskSubjectRef
-from podium.control.router import _approval_page
+from podium.control.router import _approval_page, _cursor_key
 from podium.main import create_app
 from podium.users import create_user
 from podium.workspaces import create_workspace
@@ -257,6 +260,7 @@ async def test_approvals_surface_pending_gates_and_reject_other_statuses(
     assert (await api.get(f"{base}?status=approved", headers=headers)).status_code == 422
     assert (await api.get(f"{base}?status=unknown", headers=headers)).status_code == 422
     assert (await api.get(f"{base}?cursor=not-a-cursor", headers=headers)).status_code == 422
+    assert (await api.get(f"{base}?cursor={'x' * 513}", headers=headers)).status_code == 422
     assert (await api.get(f"{base}?unexpected=value", headers=headers)).status_code == 422
 
 
@@ -327,6 +331,19 @@ def test_approval_page_breaks_created_at_ties_by_id() -> None:
     assert [approval.id for approval in next_page] == [second.id]
     assert has_more is True
     assert next_has_more is False
+
+
+def test_approval_cursor_accepts_utc_spellings_and_rejects_other_offsets() -> None:
+    approval_id = "00000000-0000-0000-0000-000000000001"
+
+    def _encode(timestamp: str) -> str:
+        return base64.urlsafe_b64encode(f"{timestamp}|{approval_id}".encode()).decode().rstrip("=")
+
+    expected = (datetime(2026, 8, 9, tzinfo=UTC), approval_id)
+    assert _cursor_key(_encode("2026-08-09T00:00:00+00:00")) == expected
+    assert _cursor_key(_encode("2026-08-09T00:00:00Z")) == expected
+    with pytest.raises(HTTPException, match="invalid cursor"):
+        _cursor_key(_encode("2026-08-09T01:00:00+01:00"))
 
 
 async def test_approvals_keep_company_ownership_opaque(
