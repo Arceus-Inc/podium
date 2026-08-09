@@ -6,15 +6,19 @@ reads run in a worker thread (the engine ledger is sync psycopg by design)."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import uuid
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar
+from datetime import datetime
+from typing import Annotated, Any, Literal, TypeVar
+from urllib.parse import urlencode
 
 from chorus.errors import OrgInvariantViolation
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -441,23 +445,130 @@ async def export_workforce(
 # -- the human boundary (CO2): CEO proposals decided by a person, never a model ---------------
 
 
-@router.get("/approvals", response_model=list[ApprovalView])
+class ApprovalsPageMeta(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    next_cursor: str | None
+    has_more: bool
+
+
+class ApprovalsPageLinks(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    self: str
+    next: str | None
+
+
+class ApprovalsPage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: tuple[ApprovalView, ...]
+    meta: ApprovalsPageMeta
+    links: ApprovalsPageLinks
+
+
+class ApprovalDetailMeta(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ApprovalDetailLinks(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    self: str
+
+
+class ApprovalDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: ApprovalView
+    meta: ApprovalDetailMeta
+    links: ApprovalDetailLinks
+
+
+def _approval_cursor(created_at: datetime, approval_id: str) -> str:
+    value = f"{created_at.isoformat()}|{approval_id}".encode()
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
+
+
+def _cursor_key(cursor: str) -> tuple[datetime, str]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        created_at_text, separator, approval_id = base64.b64decode(
+            padded.encode("ascii"), altchars=b"-_", validate=True
+        ).decode().partition("|")
+        created_at = datetime.fromisoformat(created_at_text)
+        canonical_id = str(uuid.UUID(approval_id))
+    except (UnicodeDecodeError, ValueError, binascii.Error):
+        raise HTTPException(status_code=422, detail="invalid cursor") from None
+    if (
+        not separator
+        or "|" in approval_id
+        or created_at.tzinfo is None
+        or canonical_id != approval_id
+        or _approval_cursor(created_at, approval_id) != cursor
+    ):
+        raise HTTPException(status_code=422, detail="invalid cursor")
+    return created_at, approval_id
+
+
+def _approval_page(
+    approvals: list[ApprovalView], *, cursor: tuple[datetime, str] | None, limit: int
+) -> tuple[tuple[ApprovalView, ...], bool]:
+    ordered = sorted(approvals, key=lambda approval: (approval.created_at, approval.id))
+    after_cursor = (
+        [approval for approval in ordered if (approval.created_at, approval.id) > cursor]
+        if cursor is not None
+        else ordered
+    )
+    return tuple(after_cursor[:limit]), len(after_cursor) > limit
+
+
+def _approvals_link(
+    workspace_id: uuid.UUID, company_id: uuid.UUID, *, cursor: str | None, limit: int
+) -> str:
+    query: list[tuple[str, str]] = [("status", "pending"), ("limit", str(limit))]
+    if cursor is not None:
+        query.append(("cursor", cursor))
+    path = f"/v1/workspaces/{workspace_id}/companies/{company_id}/approvals"
+    return f"{path}?{urlencode(query)}"
+
+
+@router.get("/approvals", response_model=ApprovalsPage)
 async def approvals(
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
+    request: Request,
     status: Literal["pending"] = "pending",
+    cursor: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
     provider: ControlPlaneProvider = Depends(get_control_provider),
-) -> list[ApprovalView]:
+) -> ApprovalsPage:
     """Pending human gates, oldest first; no other approval status is readable yet."""
     del status
+    if set(request.query_params) - {"status", "cursor", "limit"}:
+        raise HTTPException(status_code=422, detail="unsupported query parameter")
     await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
-    return await _plane_read(
+    pending = await _plane_read(
         provider,
         workspace_id=workspace_id,
         company_id=company_id,
         read=lambda plane: plane.governance.pending_approvals(),
+    )
+    page, has_more = _approval_page(pending, cursor=_cursor_key(cursor) if cursor else None, limit=limit)
+    next_cursor = _approval_cursor(page[-1].created_at, page[-1].id) if has_more else None
+    return ApprovalsPage(
+        data=page,
+        meta=ApprovalsPageMeta(next_cursor=next_cursor, has_more=has_more),
+        links=ApprovalsPageLinks(
+            self=_approvals_link(workspace_id, company_id, cursor=cursor, limit=limit),
+            next=(
+                _approvals_link(workspace_id, company_id, cursor=next_cursor, limit=limit)
+                if next_cursor is not None
+                else None
+            ),
+        ),
     )
 
 
@@ -475,7 +586,7 @@ def _if_none_match_matches(value: str | None, etag: str) -> bool:
     )
 
 
-@router.get("/approvals/{approval_id}", response_model=ApprovalView)
+@router.get("/approvals/{approval_id}", response_model=ApprovalDetail)
 async def approval(
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
@@ -485,7 +596,7 @@ async def approval(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
     provider: ControlPlaneProvider = Depends(get_control_provider),
-) -> ApprovalView | Response:
+) -> ApprovalDetail | Response:
     """One persisted gate, including resolved and expired records."""
     await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
     view = await _plane_read(
@@ -500,7 +611,13 @@ async def approval(
     if _if_none_match_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
-    return view
+    return ApprovalDetail(
+        data=view,
+        meta=ApprovalDetailMeta(),
+        links=ApprovalDetailLinks(
+            self=f"/v1/workspaces/{workspace_id}/companies/{company_id}/approvals/{approval_id}"
+        ),
+    )
 
 
 @router.get("/plans", response_model=list[PlanView])

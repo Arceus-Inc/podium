@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime
 
 import httpx
 import pytest_asyncio
@@ -17,6 +18,8 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
+from podium.control._governance import ApprovalView, TaskSubjectRef
+from podium.control.router import _approval_page
 from podium.main import create_app
 from podium.users import create_user
 from podium.workspaces import create_workspace
@@ -237,7 +240,8 @@ async def test_approvals_surface_pending_gates_and_reject_other_statuses(
 
     response = await api.get(f"{base}?status=pending", headers=headers)
     assert response.status_code == 200
-    approvals = response.json()
+    body = response.json()
+    approvals = body["data"]
     assert [approval["id"] for approval in approvals] == [task_approval_id, artifact_approval_id]
     assert approvals[0]["subject"] == {"kind": "task", "id": task_id}
     assert approvals[0]["action"] == "task_gate"
@@ -246,9 +250,83 @@ async def test_approvals_surface_pending_gates_and_reject_other_statuses(
     assert approvals[1]["action"] == "board_approval"
     assert all(approval["status"] == "pending" for approval in approvals)
     assert all(approval["created_at"] is not None for approval in approvals)
+    assert body["meta"] == {"next_cursor": None, "has_more": False}
+    assert body["links"]["self"] == f"{base}?status=pending&limit=50"
+    assert body["links"]["next"] is None
 
     assert (await api.get(f"{base}?status=approved", headers=headers)).status_code == 422
     assert (await api.get(f"{base}?status=unknown", headers=headers)).status_code == 422
+    assert (await api.get(f"{base}?cursor=not-a-cursor", headers=headers)).status_code == 422
+    assert (await api.get(f"{base}?unexpected=value", headers=headers)).status_code == 422
+
+
+async def test_approvals_page_is_keyseted_and_linked(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint(sessionmaker, "approval-page")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    task_approval_id, artifact_approval_id, _, _ = _seed_approvals(dsn, company_id)
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first = await api.get(f"{base}?limit=1", headers=headers)
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["data"][0]["id"] == task_approval_id
+    assert first_body["meta"]["has_more"] is True
+    assert first_body["meta"]["next_cursor"] is not None
+    assert first_body["links"]["next"] is not None
+
+    second = await api.get(first_body["links"]["next"], headers=headers)
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["data"][0]["id"] == artifact_approval_id
+    assert second_body["meta"] == {"next_cursor": None, "has_more": False}
+    assert second_body["links"]["self"] == first_body["links"]["next"]
+    assert {first_body["data"][0]["id"], second_body["data"][0]["id"]} == {
+        task_approval_id,
+        artifact_approval_id,
+    }
+    assert (await api.get(f"{base}?limit=201", headers=headers)).status_code == 422
+
+
+def test_approval_page_breaks_created_at_ties_by_id() -> None:
+    created_at = datetime.fromisoformat("2026-08-09T00:00:00+00:00")
+    first = ApprovalView(
+        id="00000000-0000-0000-0000-000000000001",
+        subject=TaskSubjectRef(id="task-a"),
+        reason="a",
+        action="task_gate",
+        status="pending",
+        gate_kind=None,
+        decided_by_user_id=None,
+        decided_at=None,
+        expires_at=None,
+        created_at=created_at,
+    )
+    second = ApprovalView(
+        id="00000000-0000-0000-0000-000000000002",
+        subject=TaskSubjectRef(id="task-b"),
+        reason="b",
+        action="task_gate",
+        status="pending",
+        gate_kind=None,
+        decided_by_user_id=None,
+        decided_at=None,
+        expires_at=None,
+        created_at=created_at,
+    )
+
+    page, has_more = _approval_page([second, first], cursor=None, limit=1)
+    assert [approval.id for approval in page] == [first.id]
+    next_page, next_has_more = _approval_page(
+        [second, first], cursor=(first.created_at, first.id), limit=1
+    )
+    assert [approval.id for approval in next_page] == [second.id]
+    assert has_more is True
+    assert next_has_more is False
 
 
 async def test_approvals_keep_company_ownership_opaque(
@@ -285,15 +363,25 @@ async def test_approvals_keep_company_ownership_opaque(
     dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
     approval_id, _, _, _ = _seed_approvals(dsn, str(company.id))
     path = f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals/{approval_id}"
+    list_path = f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals"
 
     assert (
         await api.get(path, headers={"Authorization": f"Bearer {owner_token}"})
     ).status_code == 200
     assert (
+        await api.get(list_path, headers={"Authorization": f"Bearer {owner_token}"})
+    ).status_code == 200
+    assert (
         await api.get(path, headers={"Authorization": f"Bearer {peer_token}"})
     ).status_code == 404
     assert (
+        await api.get(list_path, headers={"Authorization": f"Bearer {peer_token}"})
+    ).status_code == 404
+    assert (
         await api.get(path, headers={"Authorization": f"Bearer {foreign_token}"})
+    ).status_code == 403
+    assert (
+        await api.get(list_path, headers={"Authorization": f"Bearer {foreign_token}"})
     ).status_code == 403
 
 
@@ -353,14 +441,16 @@ async def test_approval_detail_serves_pending_resolved_and_expired(
     expired = await api.get(f"{base}/{expired_id}", headers=headers)
 
     assert pending.status_code == 200
-    assert pending.json()["status"] == "pending"
+    assert pending.json()["data"]["status"] == "pending"
+    assert pending.json()["meta"] == {}
+    assert pending.json()["links"]["self"] == f"{base}/{pending_id}"
     assert resolved.status_code == 200
-    assert resolved.json()["status"] == "approved"
-    assert resolved.json()["decided_by_user_id"] == "board-user"
-    assert resolved.json()["decided_at"] is not None
+    assert resolved.json()["data"]["status"] == "approved"
+    assert resolved.json()["data"]["decided_by_user_id"] == "board-user"
+    assert resolved.json()["data"]["decided_at"] is not None
     assert expired.status_code == 200
-    assert expired.json()["expires_at"] is not None
-    assert all(response.json()["created_at"] is not None for response in (pending, resolved, expired))
+    assert expired.json()["data"]["expires_at"] is not None
+    assert all(response.json()["data"]["created_at"] is not None for response in (pending, resolved, expired))
     assert (await api.get(f"{base}/not-a-uuid", headers=headers)).status_code == 404
     assert (await api.get(f"{base}/{uuid.uuid4()}", headers=headers)).status_code == 404
 
@@ -422,7 +512,7 @@ async def test_approval_detail_etag_revalidates_and_tracks_state(
 
     nonmatching = await api.get(path, headers={**headers, "If-None-Match": '"different"'})
     assert nonmatching.status_code == 200
-    assert nonmatching.json()["id"] == approval_id
+    assert nonmatching.json()["data"]["id"] == approval_id
 
     ledger = Ledger.open(dsn, company_id=company_id)
     try:
@@ -432,7 +522,7 @@ async def test_approval_detail_etag_revalidates_and_tracks_state(
 
     changed = await api.get(path, headers=headers)
     assert changed.status_code == 200
-    assert changed.json()["status"] == "approved"
-    assert changed.json()["decided_by_user_id"] == "board-user"
-    assert changed.json()["decided_at"] is not None
+    assert changed.json()["data"]["status"] == "approved"
+    assert changed.json()["data"]["decided_by_user_id"] == "board-user"
+    assert changed.json()["data"]["decided_at"] is not None
     assert changed.headers["etag"] != first.headers["etag"]
