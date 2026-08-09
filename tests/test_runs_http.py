@@ -7,13 +7,15 @@ from uuid import uuid4
 
 import httpx
 import pytest_asyncio
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.db import tenant_session
 from podium.main import create_app
-from podium.runs import RunStatus, claim_queued_run, finalize_run
+from podium.runs import Run, RunStatus, claim_queued_run, finalize_run
+from podium.users import create_user
 from podium.workspaces import create_workspace
 
 
@@ -85,6 +87,47 @@ async def test_canonical_create_hides_foreign_company_owner(
         headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"},
     )
     assert response.status_code == 404
+
+
+async def test_canonical_create_hides_another_users_company_in_the_same_workspace(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="A", slug="a")
+        owner = await create_user(session, workspace_id=workspace.id, email="owner@a.io", name="Owner")
+        peer = await create_user(session, workspace_id=workspace.id, email="peer@a.io", name="Peer")
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            slug="owned",
+            name="Owned",
+            owner_user_id=owner.id,
+        )
+        _, owner_token = await create_api_key(
+            session, workspace_id=workspace.id, name="owner-key", user_id=owner.id
+        )
+        _, peer_token = await create_api_key(
+            session, workspace_id=workspace.id, name="peer-key", user_id=peer.id
+        )
+    url = f"/v1/workspaces/{workspace.id}/companies/{company.id}/runs"
+    body = {"directive": "ship it"}
+    peer_response = await api.post(
+        url,
+        json=body,
+        headers={"Authorization": f"Bearer {peer_token}", "Idempotency-Key": "k1"},
+    )
+    async with sessionmaker() as session:
+        run_count = await session.scalar(
+            select(func.count()).select_from(Run).where(Run.company_id == company.id)
+        )
+    owner_response = await api.post(
+        url,
+        json=body,
+        headers={"Authorization": f"Bearer {owner_token}", "Idempotency-Key": "k1"},
+    )
+    assert peer_response.status_code == 404
+    assert run_count == 0
+    assert owner_response.status_code == 202
 
 
 async def test_create_run_accepts_deprecated_body_idempotency_key(
@@ -280,7 +323,7 @@ async def test_create_run_with_delegation_params(
 async def test_create_run_omits_unset_params_and_returns_empty_counts(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     response = await api.post(
         f"/v1/companies/{a_company}/runs",
         headers={"Authorization": f"Bearer {token}"},
@@ -294,7 +337,7 @@ async def test_create_run_omits_unset_params_and_returns_empty_counts(
 async def test_run_create_rejects_engine_private_fields(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
-    token, a_company, _b = await _setup(sessionmaker)
+    token, _workspace_id, a_company, _b = await _setup(sessionmaker)
     response = await api.post(
         f"/v1/companies/{a_company}/runs",
         headers={"Authorization": f"Bearer {token}"},
