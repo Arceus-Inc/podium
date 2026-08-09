@@ -6,7 +6,9 @@ management grants + audit trail); reject leaves the workforce untouched."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -543,3 +545,481 @@ async def test_approval_detail_etag_revalidates_and_tracks_state(
     assert changed.json()["data"]["decided_by_user_id"] == "board-user"
     assert changed.json()["data"]["decided_at"] is not None
     assert changed.headers["etag"] != first.headers["etag"]
+
+
+async def _mint_user(
+    sessionmaker: async_sessionmaker[AsyncSession], slug: str
+) -> tuple[str, str, str]:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name=slug.upper(), slug=slug)
+        user = await create_user(
+            session,
+            workspace_id=workspace.id,
+            email=f"{slug}@example.com",
+            name=slug,
+        )
+        company = await create_company(
+            session, workspace_id=workspace.id, slug=slug, name=slug.upper()
+        )
+        _, token = await create_api_key(
+            session, workspace_id=workspace.id, name=slug, user_id=user.id
+        )
+        return str(workspace.id), str(company.id), token
+
+
+async def _mint_peer_user(
+    sessionmaker: async_sessionmaker[AsyncSession], workspace_id: str, slug: str
+) -> tuple[str, str]:
+    async with sessionmaker() as session, session.begin():
+        user = await create_user(
+            session,
+            workspace_id=uuid.UUID(workspace_id),
+            email=f"{slug}@example.com",
+            name=slug,
+        )
+        _, token = await create_api_key(
+            session,
+            workspace_id=uuid.UUID(workspace_id),
+            name=slug,
+            user_id=user.id,
+        )
+        return str(user.id), token
+
+
+def _seed_authorization_gate(dsn: str, company_id: str) -> str:
+    from chorus.governance import GovernanceResolver
+    from chorus.ids import mint_id
+    from chorus.ledger import ApprovalGate, Ledger, Task
+
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        task_id = mint_id()
+        ledger.tasks.submit(Task(id=task_id, intent="ship the decision API"))
+        return GovernanceResolver(ledger).open_task_gate(
+            task_id,
+            gate_kind=ApprovalGate.AUTHORIZATION,
+            reason="human authorization required",
+        ).id
+    finally:
+        ledger.close()
+
+
+async def _approval_etag_for(
+    api: httpx.AsyncClient, path: str, headers: dict[str, str]
+) -> str:
+    detail = await api.get(path, headers=headers)
+    assert detail.status_code == 200
+    return detail.headers["etag"]
+
+
+async def test_approval_decision_creates_immutable_authenticated_proof(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-decision")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    etag = await _approval_etag_for(api, approval_path, headers)
+
+    created = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={
+            **headers,
+            "Idempotency-Key": "approve-once",
+            "If-Match": etag,
+            "X-Request-ID": "request-create",
+        },
+    )
+
+    assert created.status_code == 201
+    envelope = created.json()
+    decision = envelope["data"]
+    assert decision["approval_id"] == approval_id
+    assert decision["verdict"] == "approve"
+    assert decision["method"] == "api_key"
+    assert decision["request_id"] == "request-create"
+    assert decision["authenticated_at"] == decision["decided_at"]
+    assert envelope["links"] == {"approval": approval_path}
+    assert "location" not in created.headers
+    assert (await api.get(approval_path, headers=headers)).json()["data"]["status"] == "approved"
+
+
+async def test_approval_decision_replays_before_preconditions_and_binds_request_id(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-replay")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    created = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={
+            **headers,
+            "Idempotency-Key": "same-key",
+            "If-Match": await _approval_etag_for(api, approval_path, headers),
+            "X-Request-ID": "first-request",
+        },
+    )
+    assert created.status_code == 201
+
+    replayed = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={**headers, "Idempotency-Key": "same-key", "X-Request-ID": "second-request"},
+    )
+    assert replayed.status_code == 200
+    assert replayed.headers["idempotency-replayed"] == "true"
+    assert replayed.json() == created.json()
+    assert replayed.json()["data"]["request_id"] == "first-request"
+
+    reused = await api.post(
+        path,
+        json={"verdict": "deny"},
+        headers={**headers, "Idempotency-Key": "same-key"},
+    )
+    assert reused.status_code == 409
+    assert reused.headers["content-type"].startswith("application/problem+json")
+    assert reused.json()["type"] == "urn:podium:problem:idempotency_key_reuse"
+
+    other_approval_id = _seed_authorization_gate(dsn, company_id)
+    cross_target = await api.post(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{other_approval_id}/decisions",
+        json={"verdict": "approve"},
+        headers={**headers, "Idempotency-Key": "same-key"},
+    )
+    assert cross_target.status_code == 409
+    assert cross_target.json()["type"] == "urn:podium:problem:idempotency_key_reuse"
+
+
+async def test_approval_decision_requires_human_idempotency_and_fresh_strong_etag(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, service_token = await _mint(sessionmaker, "decision-preconditions")
+    async with sessionmaker() as session, session.begin():
+        user = await create_user(
+            session,
+            workspace_id=uuid.UUID(ws_id),
+            email="decision-user@example.com",
+            name="Decision User",
+        )
+        _, user_token = await create_api_key(
+            session, workspace_id=uuid.UUID(ws_id), name="decision-user", user_id=user.id
+        )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    user_headers = {"Authorization": f"Bearer {user_token}"}
+
+    service = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={
+            "Authorization": f"Bearer {service_token}",
+            "Idempotency-Key": "service-key",
+            "If-Match": await _approval_etag_for(
+                api, approval_path, {"Authorization": f"Bearer {service_token}"}
+            ),
+        },
+    )
+    assert service.status_code == 403
+    assert service.json()["type"] == "urn:podium:problem:human_actor_required"
+
+    missing = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={**user_headers, "Idempotency-Key": "missing-etag"},
+    )
+    assert missing.status_code == 428
+    assert missing.headers["content-type"].startswith("application/problem+json")
+
+    stale = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={
+            **user_headers,
+            "Idempotency-Key": "stale-etag",
+            "If-Match": 'W/"stale"',
+        },
+    )
+    assert stale.status_code == 412
+    assert stale.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_approval_hold_stays_pending_then_new_key_can_approve(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-hold")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    etag = await _approval_etag_for(api, approval_path, headers)
+
+    held = await api.post(
+        path,
+        json={"verdict": "hold"},
+        headers={**headers, "Idempotency-Key": "hold-key", "If-Match": etag},
+    )
+    assert held.status_code == 201
+    assert held.json()["data"]["verdict"] == "hold"
+    assert (await api.get(approval_path, headers=headers)).json()["data"]["status"] == "pending"
+
+    approved = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={**headers, "Idempotency-Key": "approve-key", "If-Match": etag},
+    )
+    assert approved.status_code == 201
+    assert approved.json()["data"]["verdict"] == "approve"
+    assert (await api.get(approval_path, headers=headers)).json()["data"]["status"] == "approved"
+
+
+def _seed_unhandled_approval(dsn: str, company_id: str) -> str:
+    from chorus.ids import mint_id
+    from chorus.ledger import Approval, ApprovalAction, ApprovalSubjectKind, Ledger
+
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        approval = ledger.approvals.request(
+            Approval(
+                id=mint_id(),
+                subject_kind=ApprovalSubjectKind.BUDGET_INCIDENT,
+                subject_id=mint_id(),
+                reason="requires an unavailable handler",
+                action=ApprovalAction.BUDGET_OVERRIDE,
+            )
+        )
+        return approval.id
+    finally:
+        ledger.close()
+
+
+async def test_approval_decision_rolls_back_proof_when_handler_fails(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-rollback")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_unhandled_approval(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    request_headers = {
+        **headers,
+        "Idempotency-Key": "rollback-key",
+        "If-Match": await _approval_etag_for(api, approval_path, headers),
+    }
+
+    failed = await api.post(path, json={"verdict": "approve"}, headers=request_headers)
+    assert failed.status_code == 409
+    assert (await api.get(approval_path, headers=headers)).json()["data"]["status"] == "pending"
+
+    replay_attempt = await api.post(path, json={"verdict": "approve"}, headers=request_headers)
+    assert replay_attempt.status_code == 409
+    nonce = hashlib.sha256(b"rollback-key").hexdigest()
+    from chorus.governance import GovernanceResolver
+    from chorus.ledger import Ledger
+
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        assert GovernanceResolver(ledger).get_authorization_proof_by_nonce(nonce) is None
+    finally:
+        ledger.close()
+
+
+async def test_approval_decision_keeps_private_company_and_approval_opaque(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="Private", slug="approval-private")
+        owner = await create_user(
+            session,
+            workspace_id=workspace.id,
+            email="owner-decision@example.com",
+            name="Owner",
+        )
+        peer = await create_user(
+            session,
+            workspace_id=workspace.id,
+            email="peer-decision@example.com",
+            name="Peer",
+        )
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            slug="private-decision",
+            name="Private Decision",
+            owner_user_id=owner.id,
+        )
+        _, peer_token = await create_api_key(
+            session, workspace_id=workspace.id, name="peer-decision", user_id=peer.id
+        )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, str(company.id))
+
+    hidden = await api.post(
+        f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals/{approval_id}/decisions",
+        json={"verdict": "approve"},
+        headers={"Authorization": f"Bearer {peer_token}", "Idempotency-Key": "opaque-key"},
+    )
+    assert hidden.status_code == 404
+
+
+async def test_concurrent_same_key_approval_decisions_converge_to_one_proof(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-concurrent-same")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    request_headers = {
+        **headers,
+        "Idempotency-Key": "concurrent-same-key",
+        "If-Match": await _approval_etag_for(api, approval_path, headers),
+    }
+
+    first, second = await asyncio.gather(
+        api.post(path, json={"verdict": "approve"}, headers=request_headers),
+        api.post(path, json={"verdict": "approve"}, headers=request_headers),
+    )
+
+    assert sorted((first.status_code, second.status_code)) == [200, 201]
+    created, replayed = (first, second) if first.status_code == 201 else (second, first)
+    assert replayed.headers["idempotency-replayed"] == "true"
+    assert replayed.json() == created.json()
+    assert created.json()["data"]["approval_id"] == approval_id
+
+
+async def test_concurrent_different_body_same_key_is_idempotency_reuse(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint_user(sessionmaker, "approval-concurrent-different")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    headers = {"Authorization": f"Bearer {token}"}
+    request_headers = {
+        **headers,
+        "Idempotency-Key": "concurrent-different-key",
+        "If-Match": await _approval_etag_for(api, approval_path, headers),
+    }
+
+    first, second = await asyncio.gather(
+        api.post(path, json={"verdict": "approve"}, headers=request_headers),
+        api.post(path, json={"verdict": "deny"}, headers=request_headers),
+    )
+
+    assert sorted((first.status_code, second.status_code)) == [201, 409]
+    reused = first if first.status_code == 409 else second
+    assert reused.headers["content-type"].startswith("application/problem+json")
+    assert reused.json()["type"] == "urn:podium:problem:idempotency_key_reuse"
+
+
+async def test_same_company_peer_cannot_replay_another_users_decision_proof(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, first_token = await _mint_user(sessionmaker, "approval-user-bound")
+    second_user_id, second_token = await _mint_peer_user(
+        sessionmaker, ws_id, "approval-user-bound-peer"
+    )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    first_headers = {"Authorization": f"Bearer {first_token}"}
+    idempotency_key = "user-bound-key"
+
+    created = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={
+            **first_headers,
+            "Idempotency-Key": idempotency_key,
+            "If-Match": await _approval_etag_for(api, approval_path, first_headers),
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["data"]["method"] == "api_key"
+    assert created.json()["data"]["user_id"] != second_user_id
+
+    reused = await api.post(
+        path,
+        json={"verdict": "approve"},
+        headers={"Authorization": f"Bearer {second_token}", "Idempotency-Key": idempotency_key},
+    )
+    assert reused.status_code == 409
+    assert reused.json()["type"] == "urn:podium:problem:idempotency_key_reuse"
+    assert created.json()["data"]["user_id"] not in reused.text
+
+
+async def test_concurrent_same_key_same_body_different_users_never_replays_proof(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, first_token = await _mint_user(
+        sessionmaker, "approval-concurrent-users"
+    )
+    _, second_token = await _mint_peer_user(
+        sessionmaker, ws_id, "approval-concurrent-users-peer"
+    )
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id = _seed_authorization_gate(dsn, company_id)
+    approval_path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    path = f"{approval_path}/decisions"
+    first_headers = {"Authorization": f"Bearer {first_token}"}
+    etag = await _approval_etag_for(api, approval_path, first_headers)
+
+    first, second = await asyncio.gather(
+        api.post(
+            path,
+            json={"verdict": "approve"},
+            headers={
+                **first_headers,
+                "Idempotency-Key": "concurrent-user-bound-key",
+                "If-Match": etag,
+            },
+        ),
+        api.post(
+            path,
+            json={"verdict": "approve"},
+            headers={
+                "Authorization": f"Bearer {second_token}",
+                "Idempotency-Key": "concurrent-user-bound-key",
+                "If-Match": etag,
+            },
+        ),
+    )
+
+    assert sorted((first.status_code, second.status_code)) == [201, 409]
+    reused = first if first.status_code == 409 else second
+    assert "idempotency-replayed" not in reused.headers
+    assert reused.json()["type"] == "urn:podium:problem:idempotency_key_reuse"

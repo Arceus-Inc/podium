@@ -10,12 +10,16 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from chorus.governance import ApprovalDecision, GovernanceResolver, HumanAuthorization
 from chorus.ledger import (
     Approval,
     ApprovalAction,
     ApprovalGate,
     ApprovalStatus,
     ApprovalSubjectKind,
+    AuthenticationMethod,
+    AuthorizationVerdict,
+    HumanAuthorizationProof,
 )
 from pydantic import BaseModel, ConfigDict
 
@@ -88,6 +92,22 @@ class ApprovalView(BaseModel):
     decided_at: datetime | None
     expires_at: datetime | None
     created_at: datetime
+
+
+class ApprovalDecisionView(BaseModel):
+    """Immutable evidence for one authenticated human approval decision."""
+
+    model_config = ConfigDict(frozen=True)
+
+    decision_id: str
+    approval_id: str
+    user_id: str
+    method: AuthenticationMethod
+    authenticated_at: datetime
+    decided_at: datetime
+    request_id: str
+    request_hash: str
+    verdict: AuthorizationVerdict
 
 
 class PlannedEmployeeView(BaseModel):
@@ -202,6 +222,20 @@ def _approval_view(approval: Approval) -> ApprovalView:
     )
 
 
+def _decision_view(proof: HumanAuthorizationProof) -> ApprovalDecisionView:
+    return ApprovalDecisionView(
+        decision_id=proof.decision_id,
+        approval_id=proof.approval_id,
+        user_id=proof.user_id,
+        method=proof.method,
+        authenticated_at=proof.authenticated_at,
+        decided_at=proof.decided_at,
+        request_id=proof.request_id,
+        request_hash=proof.request_hash,
+        verdict=proof.verdict,
+    )
+
+
 class GovernanceFacade:
     """Pure delegation to the engine's plan service; translation, never business logic."""
 
@@ -237,6 +271,32 @@ class GovernanceFacade:
         approval = self._ledger.approvals.get(approval_id)
         return _approval_view(approval) if approval is not None else None
 
+    def authorization_proof_by_nonce(self, nonce: str) -> ApprovalDecisionView | None:
+        """Read a tenant-scoped, immutable decision proof by its derived idempotency nonce."""
+        proof = GovernanceResolver(self._ledger).get_authorization_proof_by_nonce(nonce)
+        return _decision_view(proof) if proof is not None else None
+
+    def decide_approval(
+        self,
+        approval_id: str,
+        *,
+        verdict: Literal["approve", "deny", "request_revision", "hold"],
+        authorization: HumanAuthorization,
+    ) -> ApprovalDecisionView:
+        """Use Chorus's authenticated public governance API for a generic approval verdict."""
+        resolver = GovernanceResolver(self._ledger)
+        if verdict == "hold":
+            return _decision_view(resolver.hold_authenticated(approval_id, authorization=authorization))
+        resolver.resolve_authenticated(
+            approval_id,
+            decision=ApprovalDecision(verdict),
+            authorization=authorization,
+        )
+        proof = resolver.get_authorization_proof_by_nonce(authorization.nonce)
+        if proof is None:
+            raise RuntimeError("authenticated approval decision did not persist a proof")
+        return _decision_view(proof)
+
     def approve(self, plan_id: str, *, by: str) -> PlanView:
         """Atomically materialize the latest valid proposal as an audited human decision."""
         return self._decide(plan_id, by=by, approve=True)
@@ -269,6 +329,7 @@ class GovernanceFacade:
 
 
 __all__ = [
+    "ApprovalDecisionView",
     "ApprovalView",
     "GovernanceFacade",
     "ManagementGrantView",
