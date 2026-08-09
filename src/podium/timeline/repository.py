@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,7 +62,9 @@ async def advance_cursor(
             ProjectionCursor.projector == projector,
             ProjectionCursor.last_event_seq == expected_prior_seq,
         )
-        .values(last_event_seq=next_seq, projector_version=projector_version, projected_at=func.now())
+        .values(
+            last_event_seq=next_seq, projector_version=projector_version, projected_at=func.now()
+        )
         .returning(ProjectionCursor.company_id)
     )
     return (await session.execute(stmt)).scalar_one_or_none() is not None
@@ -116,3 +118,26 @@ async def list_items(
         .limit(limit)
     )
     return list((await session.execute(stmt)).scalars())
+
+
+async def clear_projection(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    projector: str,
+) -> None:
+    """Remove one company's materialized timeline so it can be rebuilt from durable events."""
+    await session.execute(
+        delete(TimelineItem).where(
+            TimelineItem.company_id == company_id,
+            TimelineItem.workspace_id == workspace_id,
+        )
+    )
+    await session.execute(
+        delete(ProjectionCursor).where(
+            ProjectionCursor.company_id == company_id,
+            ProjectionCursor.workspace_id == workspace_id,
+            ProjectionCursor.projector == projector,
+        )
+    )
