@@ -975,14 +975,6 @@ def _approval_etag(view: ApprovalView) -> str:
     return f'"{hashlib.sha256(payload.encode()).hexdigest()}"'
 
 
-def _if_none_match_matches(value: str | None, etag: str) -> bool:
-    if value is None:
-        return False
-    return value.strip() == "*" or any(
-        validator.strip().removeprefix("W/") == etag for validator in value.split(",")
-    )
-
-
 def _if_match_matches(value: str | None, etag: str) -> bool:
     """Require exactly one strong ETag: wildcard and weak validators are unsafe for mutation."""
     return value is not None and value.strip() == etag
