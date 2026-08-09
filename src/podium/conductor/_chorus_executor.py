@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+from chorus.ledger import judge_task_finalization
 from chorus.ledger._models import TaskStatus
 from horizon.model import Decision
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,9 +35,9 @@ from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id
 
 logger = structlog.get_logger("podium.conductor")
+_GOAL_JUDGE_ERROR_PREFIX = "goal_judge"
 
 _TERMINAL: dict[TaskStatus, RunStatus] = {
-    TaskStatus.DONE: RunStatus.SUCCEEDED,
     TaskStatus.CANCELLED: RunStatus.CANCELED,
     TaskStatus.REJECTED: RunStatus.FAILED,
 }
@@ -387,7 +388,29 @@ class ChorusRunExecutor:
                 if await is_canceled():
                     return ExecutionResult(status=RunStatus.CANCELED)
                 current = runtime.graph.org._ledger.tasks.get(task_id)
-                if current is not None and current.status in _TERMINAL:
+                if current is None:
+                    return ExecutionResult(
+                        status=RunStatus.FAILED,
+                        error=f"{_GOAL_JUDGE_ERROR_PREFIX}:task_missing",
+                    )
+                if current is not None and current.status is TaskStatus.DONE:
+                    try:
+                        judgment = judge_task_finalization(runtime.graph.org._ledger, task_id)
+                    except Exception:
+                        logger.exception("goal_judge_internal_error", task_id=task_id)
+                        return ExecutionResult(
+                            status=RunStatus.FAILED,
+                            error=f"{_GOAL_JUDGE_ERROR_PREFIX}:internal_error",
+                        )
+                    if judgment.passed:
+                        return ExecutionResult(status=RunStatus.SUCCEEDED)
+                    reason = judgment.reason
+                    assert reason is not None
+                    return ExecutionResult(
+                        status=RunStatus.FAILED,
+                        error=f"{_GOAL_JUDGE_ERROR_PREFIX}:{reason.value}",
+                    )
+                if current.status in _TERMINAL:
                     mapped = _TERMINAL[current.status]
                     error = "task rejected" if mapped is RunStatus.FAILED else None
                     return ExecutionResult(status=mapped, error=error)
