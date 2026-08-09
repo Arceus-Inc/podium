@@ -92,6 +92,7 @@ async def test_real_run_reaches_a_terminal_status(
 
     try:
         assert await conductor.dispatch_once() == 1
+        await conductor.drain()
         async with tenant_session(app_sessionmaker, ws_id) as s:
             finished = await get_run(s, run_id)
         assert finished is not None
