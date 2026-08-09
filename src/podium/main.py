@@ -27,6 +27,7 @@ from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
 from podium.settings import get_settings
+from podium.timeline.router import router as timeline_router
 
 
 @asynccontextmanager
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(runs_router)
     app.include_router(events_router)
     app.include_router(control_router)
+    app.include_router(timeline_router)
     app.include_router(cockpit_shell_router)
     app.include_router(dev_router)
     app.include_router(cockpit_router)
