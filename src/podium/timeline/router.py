@@ -60,25 +60,25 @@ def _parse_utc(value: str, *, field: str) -> datetime:
 
 
 def _encode_cursor(item: TimelineItem) -> str:
-    value = f"{item.occurred_at.astimezone(UTC).isoformat()}|{item.source_event_seq}|{item.id}"
-    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+    return base64.urlsafe_b64encode(str(item.source_event_seq).encode()).decode().rstrip("=")
 
 
 def _decode_cursor(value: str) -> TimelineCursor:
     try:
         padding = "=" * (-len(value) % 4)
         decoded = base64.b64decode(value + padding, altchars=b"-_", validate=True).decode()
-        occurred_at_text, source_event_seq_text, item_id_text = decoded.split("|", maxsplit=2)
-        source_event_seq = int(source_event_seq_text)
+        source_event_seq = int(decoded)
         if source_event_seq < 0:
             raise ValueError("negative sequence")
-        return TimelineCursor(
-            occurred_at=_parse_utc(occurred_at_text, field="cursor"),
-            source_event_seq=source_event_seq,
-            item_id=uuid.UUID(item_id_text),
-        )
+        if _encode_cursor_for_seq(source_event_seq) != value:
+            raise ValueError("noncanonical cursor")
+        return TimelineCursor(source_event_seq=source_event_seq)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise HTTPException(status_code=422, detail="cursor is invalid") from exc
+
+
+def _encode_cursor_for_seq(source_event_seq: int) -> str:
+    return base64.urlsafe_b64encode(str(source_event_seq).encode()).decode().rstrip("=")
 
 
 def _list_link(
@@ -202,7 +202,11 @@ async def list_timeline(
     )
     return TimelinePageEnvelope(
         data=views,
-        meta=TimelinePageMeta(has_more=page.has_more, next_cursor=next_cursor),
+        meta=TimelinePageMeta(
+            has_more=page.has_more,
+            next_cursor=next_cursor,
+            as_of_seq=page.as_of_seq,
+        ),
         links=TimelineLinks(self=self_link, next=next_link),
     )
 

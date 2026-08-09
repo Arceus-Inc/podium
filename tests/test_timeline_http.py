@@ -1,4 +1,4 @@
-"""HTTP proofs for newest-first, tenant-scoped timeline reads."""
+"""HTTP proofs for newest-sequence-first, tenant-scoped timeline reads."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def test_timeline_page_is_newest_first_and_keyset_safe(
+async def test_timeline_page_is_newest_sequence_first_and_keyset_safe(
     api: httpx.AsyncClient,
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
@@ -143,7 +143,8 @@ async def test_timeline_page_is_newest_first_and_keyset_safe(
     first = await api.get(f"{base}?limit=1", headers=_headers(owner_token))
     assert first.status_code == 200, first.text
     first_body = first.json()
-    assert [item["source_event_seq"] for item in first_body["data"]] == [2]
+    assert [item["source_event_seq"] for item in first_body["data"]] == [3]
+    assert first_body["meta"]["as_of_seq"] == 3
     assert first_body["meta"]["has_more"] is True
     assert first_body["links"]["self"].endswith("timeline?limit=1")
     assert first_body["links"]["next"] is not None
@@ -151,12 +152,12 @@ async def test_timeline_page_is_newest_first_and_keyset_safe(
     second = await api.get(first_body["links"]["next"], headers=_headers(owner_token))
     assert second.status_code == 200, second.text
     second_body = second.json()
-    assert [item["source_event_seq"] for item in second_body["data"]] == [1]
+    assert [item["source_event_seq"] for item in second_body["data"]] == [2]
 
     third = await api.get(second_body["links"]["next"], headers=_headers(owner_token))
     assert third.status_code == 200, third.text
-    assert [item["source_event_seq"] for item in third.json()["data"]] == [3]
-    assert third.json()["meta"] == {"has_more": False, "next_cursor": None}
+    assert [item["source_event_seq"] for item in third.json()["data"]] == [1]
+    assert third.json()["meta"] == {"has_more": False, "next_cursor": None, "as_of_seq": 3}
 
 
 async def test_timeline_filters_are_applied_and_invalid_inputs_are_problems(

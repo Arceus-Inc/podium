@@ -21,15 +21,14 @@ class TimelinePage:
 
     items: tuple[TimelineItem, ...]
     has_more: bool
+    as_of_seq: int
 
 
 @dataclass(frozen=True, slots=True)
 class TimelineCursor:
-    """The complete, stable ordering position for a timeline item."""
+    """The durable projection position used for timeline pagination."""
 
-    occurred_at: datetime
     source_event_seq: int
-    item_id: uuid.UUID
 
 
 async def source_event_exists(
@@ -206,29 +205,18 @@ async def page_items(
     if occurred_before is not None:
         filters.append(TimelineItem.occurred_at <= occurred_before)
     if cursor is not None:
-        filters.append(
-            or_(
-                TimelineItem.occurred_at < cursor.occurred_at,
-                and_(
-                    TimelineItem.occurred_at == cursor.occurred_at,
-                    TimelineItem.source_event_seq < cursor.source_event_seq,
-                ),
-                and_(
-                    TimelineItem.occurred_at == cursor.occurred_at,
-                    TimelineItem.source_event_seq == cursor.source_event_seq,
-                    TimelineItem.id < cursor.item_id,
-                ),
-            )
-        )
+        filters.append(TimelineItem.source_event_seq < cursor.source_event_seq)
+    as_of_stmt = select(func.coalesce(func.max(TimelineItem.source_event_seq), 0)).where(
+        TimelineItem.company_id == company_id
+    )
+    as_of_seq = int((await session.execute(as_of_stmt)).scalar_one())
     stmt = (
         select(TimelineItem)
         .where(*filters)
         .order_by(
-            desc(TimelineItem.occurred_at),
             desc(TimelineItem.source_event_seq),
-            desc(TimelineItem.id),
         )
         .limit(limit + 1)
     )
     rows = tuple((await session.execute(stmt)).scalars())
-    return TimelinePage(items=rows[:limit], has_more=len(rows) > limit)
+    return TimelinePage(items=rows[:limit], has_more=len(rows) > limit, as_of_seq=as_of_seq)

@@ -42,6 +42,7 @@ class TimelinePageMeta(BaseModel):
 
     has_more: bool
     next_cursor: str | None
+    as_of_seq: int
 
 
 class TimelinePageEnvelope(BaseModel):
