@@ -29,11 +29,14 @@ def upgrade() -> None:
         sa.Column("company_id", postgresql.UUID(), nullable=False),
         sa.Column("actor_type", sa.String(), nullable=False),
         sa.Column("actor_id", postgresql.UUID(), nullable=False),
-        sa.Column("ticket_hash", sa.String(), nullable=False),
+        sa.Column("ticket_hash", sa.String(length=64), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint(
             "actor_type IN ('service', 'user')", name="ck_stream_tickets_actor_type"
+        ),
+        sa.CheckConstraint(
+            "char_length(ticket_hash) = 64", name="ck_stream_tickets_ticket_hash_length"
         ),
         sa.ForeignKeyConstraint(
             ["workspace_id"],
@@ -55,6 +58,11 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_stream_tickets_workspace_id", "stream_tickets", ["workspace_id"])
+    op.create_index(
+        "ix_stream_tickets_workspace_company_expires_at",
+        "stream_tickets",
+        ["workspace_id", "company_id", "expires_at"],
+    )
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON stream_tickets TO podium_app")
     op.execute("ALTER TABLE stream_tickets ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE stream_tickets FORCE ROW LEVEL SECURITY")
@@ -67,5 +75,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP POLICY IF EXISTS stream_tickets_tenant_isolation ON stream_tickets")
+    op.drop_index("ix_stream_tickets_workspace_company_expires_at", table_name="stream_tickets")
     op.drop_index("ix_stream_tickets_workspace_id", table_name="stream_tickets")
     op.drop_table("stream_tickets")

@@ -9,6 +9,7 @@ from podium.stream_tickets.service import (
     RedeemedStreamTicket,
     generate_stream_ticket,
     hash_stream_ticket,
+    is_valid_stream_ticket,
     mint_stream_ticket,
     redeem_stream_ticket,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "StreamTicket",
     "generate_stream_ticket",
     "hash_stream_ticket",
+    "is_valid_stream_ticket",
     "mint_stream_ticket",
     "redeem_stream_ticket",
 ]

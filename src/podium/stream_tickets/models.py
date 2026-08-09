@@ -35,12 +35,15 @@ class StreamTicket(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     actor_type: Mapped[str] = mapped_column(String)
     actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
-    ticket_hash: Mapped[str] = mapped_column(String)
+    ticket_hash: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     __table_args__ = (
         CheckConstraint("actor_type IN ('service', 'user')", name="ck_stream_tickets_actor_type"),
+        CheckConstraint(
+            "char_length(ticket_hash) = 64", name="ck_stream_tickets_ticket_hash_length"
+        ),
         ForeignKeyConstraint(
             ["company_id", "workspace_id"],
             ["companies.id", "companies.workspace_id"],
@@ -54,4 +57,10 @@ class StreamTicket(Base):
             name="uq_stream_tickets_id_company_id_workspace_id",
         ),
         Index("ix_stream_tickets_workspace_id", "workspace_id"),
+        Index(
+            "ix_stream_tickets_workspace_company_expires_at",
+            "workspace_id",
+            "company_id",
+            "expires_at",
+        ),
     )

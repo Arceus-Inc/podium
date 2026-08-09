@@ -1,4 +1,4 @@
-"""Stream-ticket service: single-use redemption, tenant scope, and actor binding."""
+"""Stream-ticket service: bearerless redemption, tenant scope, and single-use semantics."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import Actor, create_api_key, resolve_actor
@@ -71,7 +71,6 @@ async def test_stream_ticket_redeems_once_and_replays_none(
         redeemed = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=owner,
             workspace_id=workspace_id,
             company_id=company_id,
         )
@@ -79,15 +78,15 @@ async def test_stream_ticket_redeems_once_and_replays_none(
         replay = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=owner,
             workspace_id=workspace_id,
             company_id=company_id,
         )
 
     assert redeemed is not None
-    assert redeemed.workspace_id == workspace_id
-    assert redeemed.company_id == company_id
-    assert redeemed.actor_id == owner.actor_id
+    assert redeemed.actor.workspace_id == workspace_id
+    assert redeemed.actor.company_id == company_id
+    assert redeemed.actor.actor_id == owner.actor_id
+    assert redeemed.actor.actor_type == owner.actor_type
     assert replay is None
 
 
@@ -112,12 +111,18 @@ async def test_stream_ticket_expiry_blocks_redemption(
         redeemed = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=owner,
             workspace_id=workspace_id,
             company_id=company_id,
         )
+    async with sessionmaker() as session:
+        remaining = await session.scalar(
+            select(func.count()).select_from(StreamTicket).where(
+                StreamTicket.ticket_hash == hash_stream_ticket(minted.ticket)
+            )
+        )
 
     assert redeemed is None
+    assert remaining == 0
 
 
 async def test_stream_ticket_concurrent_redeem_has_single_winner(
@@ -137,7 +142,6 @@ async def test_stream_ticket_concurrent_redeem_has_single_winner(
             redeemed = await redeem_stream_ticket(
                 session,
                 ticket=minted.ticket,
-                actor=owner,
                 workspace_id=workspace_id,
                 company_id=company_id,
             )
@@ -149,25 +153,43 @@ async def test_stream_ticket_concurrent_redeem_has_single_winner(
     assert len(redeemed_ids) == 1
 
 
-async def test_stream_ticket_is_bound_to_workspace_company_and_actor(
+async def test_stream_ticket_redeems_without_caller_actor_and_returns_stored_identity(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
 ) -> None:
-    workspace_id, company_id, owner_token, peer_token = await _seed_owned_company(sessionmaker)
+    workspace_id, company_id, owner_token, _peer_token = await _seed_owned_company(sessionmaker)
     owner = await _actor_from_token(sessionmaker, owner_token)
-    peer = await _actor_from_token(sessionmaker, peer_token)
+
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        minted = await mint_stream_ticket(
+            session, workspace_id=workspace_id, company_id=company_id, actor=owner
+        )
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        redeemed = await redeem_stream_ticket(
+            session,
+            ticket=minted.ticket,
+            workspace_id=workspace_id,
+            company_id=company_id,
+        )
+
+    assert redeemed is not None
+    assert redeemed.actor.workspace_id == workspace_id
+    assert redeemed.actor.company_id == company_id
+    assert redeemed.actor.actor_type == "user"
+    assert redeemed.actor.actor_id == owner.actor_id
+
+
+async def test_stream_ticket_rejects_wrong_workspace_company_and_invalid_ticket_without_consuming(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, owner_token, _peer_token = await _seed_owned_company(sessionmaker)
+    owner = await _actor_from_token(sessionmaker, owner_token)
     async with sessionmaker() as session, session.begin():
         other_company = await create_company(
             session, workspace_id=workspace_id, slug="shared", name="Shared"
         )
         other_workspace = await create_workspace(session, name="B", slug="b")
-        other_user = await create_user(
-            session, workspace_id=other_workspace.id, email="other@example.com", name="Other"
-        )
-        _, other_token = await create_api_key(
-            session, workspace_id=other_workspace.id, name="other", user_id=other_user.id
-        )
-    other_actor = await _actor_from_token(sessionmaker, other_token)
 
     async with tenant_session(app_sessionmaker, workspace_id) as session:
         minted = await mint_stream_ticket(
@@ -175,17 +197,9 @@ async def test_stream_ticket_is_bound_to_workspace_company_and_actor(
         )
 
     async with tenant_session(app_sessionmaker, workspace_id) as session:
-        peer_redeem = await redeem_stream_ticket(
-            session,
-            ticket=minted.ticket,
-            actor=peer,
-            workspace_id=workspace_id,
-            company_id=company_id,
-        )
         wrong_company = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=owner,
             workspace_id=workspace_id,
             company_id=other_company.id,
         )
@@ -193,22 +207,27 @@ async def test_stream_ticket_is_bound_to_workspace_company_and_actor(
         wrong_workspace = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=other_actor,
             workspace_id=other_workspace.id,
+            company_id=company_id,
+        )
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        invalid = await redeem_stream_ticket(
+            session,
+            ticket="not a valid ticket",
+            workspace_id=workspace_id,
             company_id=company_id,
         )
     async with tenant_session(app_sessionmaker, workspace_id) as session:
         rightful = await redeem_stream_ticket(
             session,
             ticket=minted.ticket,
-            actor=owner,
             workspace_id=workspace_id,
             company_id=company_id,
         )
 
-    assert peer_redeem is None
     assert wrong_company is None
     assert wrong_workspace is None
+    assert invalid is None
     assert rightful is not None
 
 

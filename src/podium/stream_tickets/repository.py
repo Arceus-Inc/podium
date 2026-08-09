@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete
+from sqlalchemy import DateTime, bindparam, delete, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.stream_tickets.models import StreamTicket
@@ -22,6 +22,13 @@ class RedeemedStreamTicketRow:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class CreatedStreamTicketRow:
+    id: uuid.UUID
+    created_at: datetime
+    expires_at: datetime
+
+
 async def create_stream_ticket(
     session: AsyncSession,
     *,
@@ -30,21 +37,24 @@ async def create_stream_ticket(
     actor_type: str,
     actor_id: uuid.UUID,
     ticket_hash: str,
-    expires_at: datetime,
     created_at: datetime,
-) -> StreamTicket:
-    ticket = StreamTicket(
-        workspace_id=workspace_id,
-        company_id=company_id,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        ticket_hash=ticket_hash,
-        expires_at=expires_at,
-        created_at=created_at,
+) -> CreatedStreamTicketRow:
+    created_at_param = bindparam("created_at", type_=DateTime(timezone=True))
+    stmt = (
+        insert(StreamTicket)
+        .values(
+            workspace_id=workspace_id,
+            company_id=company_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            ticket_hash=ticket_hash,
+            created_at=created_at_param,
+            expires_at=created_at_param + text("interval '60 seconds'"),
+        )
+        .returning(StreamTicket.id, StreamTicket.created_at, StreamTicket.expires_at)
     )
-    session.add(ticket)
-    await session.flush()
-    return ticket
+    row = (await session.execute(stmt, {"created_at": created_at})).one()
+    return CreatedStreamTicketRow(id=row.id, created_at=row.created_at, expires_at=row.expires_at)
 
 
 async def redeem_stream_ticket(
@@ -53,8 +63,6 @@ async def redeem_stream_ticket(
     ticket_hash: str,
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
-    actor_type: str,
-    actor_id: uuid.UUID,
     now: datetime,
 ) -> RedeemedStreamTicketRow | None:
     stmt = (
@@ -63,8 +71,6 @@ async def redeem_stream_ticket(
             StreamTicket.ticket_hash == ticket_hash,
             StreamTicket.workspace_id == workspace_id,
             StreamTicket.company_id == company_id,
-            StreamTicket.actor_type == actor_type,
-            StreamTicket.actor_id == actor_id,
             StreamTicket.expires_at > now,
         )
         .returning(
@@ -78,6 +84,14 @@ async def redeem_stream_ticket(
     )
     row = (await session.execute(stmt)).one_or_none()
     if row is None:
+        await session.execute(
+            delete(StreamTicket).where(
+                StreamTicket.ticket_hash == ticket_hash,
+                StreamTicket.workspace_id == workspace_id,
+                StreamTicket.company_id == company_id,
+                StreamTicket.expires_at <= now,
+            )
+        )
         return None
     ticket_id, row_workspace_id, row_company_id, row_actor_type, row_actor_id, expires_at = row
     return RedeemedStreamTicketRow(
@@ -88,3 +102,31 @@ async def redeem_stream_ticket(
         actor_id=row_actor_id,
         expires_at=expires_at,
     )
+
+
+async def delete_expired_stream_tickets(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    now: datetime,
+    limit: int,
+) -> int:
+    expired_ids = (
+        select(StreamTicket.id)
+        .where(
+            StreamTicket.workspace_id == workspace_id,
+            StreamTicket.company_id == company_id,
+            StreamTicket.expires_at <= now,
+        )
+        .order_by(StreamTicket.expires_at)
+        .limit(limit)
+    )
+    deleted_ids = (
+        await session.execute(
+            delete(StreamTicket)
+            .where(StreamTicket.id.in_(expired_ids))
+            .returning(StreamTicket.id)
+        )
+    ).scalars().all()
+    return len(deleted_ids)
