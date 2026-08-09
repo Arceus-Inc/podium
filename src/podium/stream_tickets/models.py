@@ -44,6 +44,10 @@ class StreamTicket(Base):
         CheckConstraint(
             "char_length(ticket_hash) = 64", name="ck_stream_tickets_ticket_hash_length"
         ),
+        CheckConstraint(
+            "expires_at = created_at + interval '60 seconds'",
+            name="ck_stream_tickets_exact_ttl",
+        ),
         ForeignKeyConstraint(
             ["company_id", "workspace_id"],
             ["companies.id", "companies.workspace_id"],

@@ -105,6 +105,41 @@ async def test_id_columns_are_native_uuid_in_postgres(
     assert wrong == {}, f"non-uuid id columns: {wrong}"
 
 
+async def test_stream_ticket_ttl_constraint_is_declared_in_metadata_and_database(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    metadata_constraint_sql = {
+        str(constraint.sqltext)
+        for constraint in StreamTicket.__table__.constraints
+        if getattr(constraint, "sqltext", None) is not None
+    }
+    async with sessionmaker() as session:
+        database_constraints = set(
+            (
+                await session.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint "
+                        "WHERE conrelid = 'stream_tickets'::regclass"
+                    )
+                )
+            ).scalars()
+        )
+        ttl_definition = await session.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'stream_tickets'::regclass "
+                "AND conname LIKE '%ck_stream_tickets_exact_ttl'"
+            )
+        )
+
+    assert "expires_at = created_at + interval '60 seconds'" in metadata_constraint_sql
+    assert any(
+        constraint_name.endswith("ck_stream_tickets_exact_ttl")
+        for constraint_name in database_constraints
+    )
+    assert ttl_definition == "CHECK ((expires_at = (created_at + '00:01:00'::interval)))"
+
+
 async def test_rls_still_bites_with_uuid_guc(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
