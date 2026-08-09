@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from horizon.generation import Proposal
-from horizon.model import StrategyRecord
-from pydantic import BaseModel, ConfigDict
+from horizon.model import Decision, StrategyRecord
+from pydantic import BaseModel, ConfigDict, field_validator
 
 if TYPE_CHECKING:
     from chorus.ledger import Ledger
@@ -128,11 +129,21 @@ class ProposalView(BaseModel):
     brief: DirectionBriefView | None
     decision_statement: str
     decision_rationale: str
-    created_at: str
+    created_at: datetime | None
     decided_by: str | None
-    decided_at: str | None
+    decided_at: datetime | None
     linked_decision_id: str | None
     note: str
+
+    @field_validator("created_at", "decided_at")
+    @classmethod
+    def _require_utc_timestamp(cls, value: datetime | None) -> datetime | None:
+        """Horizon Postgres timestamps are absolute instants, never local or naive clock values."""
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() != timedelta():
+            raise ValueError("timestamp must be UTC")
+        return value.astimezone(UTC)
 
 
 class DirectionFacade:
@@ -153,17 +164,12 @@ class DirectionFacade:
 
     def decisions(self) -> list[DecisionView]:
         """Every Horizon decision in the repository's durable insertion order."""
-        return [
-            DecisionView(
-                id=decision.id,
-                statement=decision.statement,
-                status=decision.status,
-                owner=decision.owner,
-                rationale=decision.rationale,
-                goal_ids=tuple(decision.goal_ids),
-            )
-            for decision in self._decisions.all()
-        ]
+        return [self._decision_view(decision) for decision in self._decisions.all()]
+
+    def decision(self, decision_id: str) -> DecisionView | None:
+        """One Horizon decision, or ``None`` when the company does not own that ID."""
+        decision = self._decisions.get(decision_id)
+        return self._decision_view(decision) if decision is not None else None
 
     def strategies(self) -> list[StrategyView]:
         """Every Horizon strategy record as a frozen product view."""
@@ -283,6 +289,18 @@ class DirectionFacade:
         )
 
     @staticmethod
+    def _decision_view(decision: Decision) -> DecisionView:
+        """Translate a public Horizon decision record at the product boundary."""
+        return DecisionView(
+            id=decision.id,
+            statement=decision.statement,
+            status=decision.status,
+            owner=decision.owner,
+            rationale=decision.rationale,
+            goal_ids=tuple(decision.goal_ids),
+        )
+
+    @staticmethod
     def _proposal_view(proposal: Proposal) -> ProposalView:
         brief = proposal.brief
         return ProposalView(
@@ -312,12 +330,25 @@ class DirectionFacade:
             ),
             decision_statement=proposal.decision_statement,
             decision_rationale=proposal.decision_rationale,
-            created_at=proposal.created_at,
+            created_at=(
+                DirectionFacade._parse_proposal_timestamp(proposal.created_at)
+                if proposal.created_at
+                else None
+            ),
             decided_by=proposal.decided_by,
-            decided_at=proposal.decided_at,
+            decided_at=(
+                DirectionFacade._parse_proposal_timestamp(proposal.decided_at)
+                if proposal.decided_at is not None
+                else None
+            ),
             linked_decision_id=proposal.linked_decision_id,
             note=proposal.note,
         )
+
+    @staticmethod
+    def _parse_proposal_timestamp(value: str) -> datetime:
+        """Parse Horizon's Postgres RFC 3339 text before the DTO enforces its UTC invariant."""
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 __all__ = [
