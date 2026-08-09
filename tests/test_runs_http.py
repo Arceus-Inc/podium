@@ -75,6 +75,26 @@ async def test_create_run_rejects_missing_or_conflicting_idempotency_keys(
     assert conflicting.status_code == 422
 
 
+async def test_create_run_rejects_idempotency_keys_over_the_shared_limit(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    too_long = "k" * 129
+    url = f"/v1/companies/{a_company}/runs"
+    header = await api.post(
+        url,
+        json={"directive": "ship it"},
+        headers={"Authorization": f"Bearer {token}", "Idempotency-Key": too_long},
+    )
+    body = await api.post(
+        url,
+        json={"directive": "ship it", "idempotency_key": too_long},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert header.status_code == 422
+    assert body.status_code == 422
+
+
 async def test_in_progress_idempotency_replay_returns_problem_and_retry_after(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -125,8 +145,10 @@ async def test_run_idempotency_openapi_documents_header_and_body_deprecation(
     operation = schema["paths"]["/v1/companies/{company_id}/runs"]["post"]
     header = next(parameter for parameter in operation["parameters"] if parameter["name"] == "Idempotency-Key")
     assert header["in"] == "header"
+    assert header["schema"]["anyOf"][0]["maxLength"] == 128
     body_schema = schema["components"]["schemas"]["RunCreate"]
     assert body_schema["properties"]["idempotency_key"]["deprecated"] is True
+    assert body_schema["properties"]["idempotency_key"]["anyOf"][0]["maxLength"] == 128
     assert "Idempotency-Replayed" in operation["responses"]["200"]["headers"]
 
 

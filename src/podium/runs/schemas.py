@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from podium.runs.models import RunStatus
+IDEMPOTENCY_KEY_MAX_LENGTH = 128
 
 
 class RunCreate(BaseModel):
@@ -16,7 +17,10 @@ class RunCreate(BaseModel):
 
     directive: str
     idempotency_key: str | None = Field(
-        default=None, min_length=1, json_schema_extra={"deprecated": True}
+        default=None,
+        min_length=1,
+        max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
+        json_schema_extra={"deprecated": True},
     )
     # One run resource; execution_mode discriminates (M4 §3.3). Delegation params are
     # meaningful only in delegation mode and required there — fail at the door. Formation

@@ -75,6 +75,46 @@ async def test_create_run_rejects_same_key_for_different_execution(
             )
 
 
+async def test_legacy_empty_fingerprint_replays_only_the_persisted_request(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    ws_id, company_id = await _workspace_with_company(sessionmaker)
+    params = {"execution_mode": "delivery"}
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        run, _ = await create_run(
+            s,
+            workspace_id=ws_id,
+            company_id=company_id,
+            directive="ship it",
+            idempotency_key="legacy-key",
+            params=params,
+        )
+        run.request_fingerprint = ""  # migration's legacy sentinel
+        replay, created = await create_run(
+            s,
+            workspace_id=ws_id,
+            company_id=company_id,
+            directive="ship it",
+            idempotency_key="legacy-key",
+            params=params,
+        )
+        assert created is False
+        assert replay.id == run.id
+        assert replay.request_fingerprint == request_fingerprint(directive="ship it", params=params)
+
+        replay.request_fingerprint = ""  # prove a different request still cannot reuse the key
+        with pytest.raises(IdempotencyKeyReuseError):
+            await create_run(
+                s,
+                workspace_id=ws_id,
+                company_id=company_id,
+                directive="change scope",
+                idempotency_key="legacy-key",
+                params=params,
+            )
+
+
 async def test_create_run_is_concurrency_safe(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],

@@ -24,6 +24,7 @@ from podium.companies import get_company
 from podium.db import tenant_session
 from podium.http_errors import ProblemHTTPException
 from podium.logs import RunLogStore
+from podium.runs.models import TERMINAL_STATUSES
 from podium.runs.schemas import RunCreate, RunOut, RunPage, RunPageLinks, RunPageMeta
 from podium.runs.service import (
     IdempotencyKeyReuseError,
@@ -133,6 +134,7 @@ async def create(
             alias="Idempotency-Key",
             description="Preferred idempotency key for run creation; the request-body alias is deprecated.",
             min_length=1,
+            max_length=IDEMPOTENCY_KEY_MAX_LENGTH,
         ),
     ] = None,
     actor: Actor = Depends(enforce_rate_limit),

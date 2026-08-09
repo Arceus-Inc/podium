@@ -27,19 +27,9 @@ class IdempotencyKeyReuseError(Exception):
     """A client reused a key for a request whose execution would differ."""
 
 
-class RunRequestFingerprint(BaseModel):
-    """The stable input to idempotent run creation, excluding its idempotency key."""
-
-    model_config = ConfigDict(frozen=True)
-
-    directive: str
-    execution_params: dict[str, object]
-
-
 def request_fingerprint(*, directive: str, params: dict[str, object] | None) -> str:
-    request = RunRequestFingerprint(directive=directive, execution_params=params or {})
     canonical = json.dumps(
-        request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        (directive, params or {}), sort_keys=True, separators=(",", ":"), ensure_ascii=True
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -109,7 +99,14 @@ async def create_run(
                 )
             )
         ).scalar_one()
-        if existing.request_fingerprint != request_fingerprint_value:
+        existing_fingerprint = existing.request_fingerprint
+        if existing_fingerprint == "":
+            existing_fingerprint = request_fingerprint(
+                directive=existing.directive, params=existing.params
+            )
+            if existing_fingerprint == request_fingerprint_value:
+                existing.request_fingerprint = existing_fingerprint
+        if existing_fingerprint != request_fingerprint_value:
             raise IdempotencyKeyReuseError
         return existing, False
     # Wake the conductor in the same transaction that created the work.
