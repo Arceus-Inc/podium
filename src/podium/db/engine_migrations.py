@@ -130,6 +130,9 @@ def _sync_stream(connection: Connection, stream: EngineMigrationStream) -> None:
         )
         for table_name in migration.table_names():
             _grant_runtime_table_access(connection, table_name)
+    for migration in stream.migrations:
+        for table_name in migration.table_names():
+            _grant_runtime_table_access(connection, table_name)
     _grant_runtime_metadata_access(connection, stream.metadata_table)
 
 
@@ -149,6 +152,8 @@ def _validate_applied(
     ahead = applied_ids - expected_ids
     if ahead:
         raise EngineMigrationAheadError(f"{stream.name} database migration is ahead")
+    if _has_sparse_history(stream.migrations, applied):
+        raise EngineMigrationNotReadyError(f"{stream.name} migration history is not a prefix")
     for record in expected:
         applied_checksum = _checksum_for(applied, record.id)
         if applied_checksum is None:
@@ -162,6 +167,18 @@ def _validate_applied(
         for migration in stream.migrations
         if _checksum_for(applied, migration.id) is None
     )
+
+
+def _has_sparse_history(
+    migrations: tuple[MigrationContract, ...], applied: tuple[MigrationRecord, ...]
+) -> bool:
+    found_missing = False
+    for migration in migrations:
+        if _checksum_for(applied, migration.id) is None:
+            found_missing = True
+        elif found_missing:
+            return True
+    return False
 
 
 def _metadata_table_exists(connection: Connection, table_name: str) -> bool:

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from podium.db.engine_migrations import EngineMigrationStream, engine_migration_streams
+from podium.db.engine_migrations import (
+    EngineMigrationNotReadyError,
+    EngineMigrationStream,
+    engine_migration_streams,
+    sync_engine_migrations,
+)
 from podium.main import create_app
 
 
@@ -130,3 +136,64 @@ async def test_readyz_hides_database_ahead_state(
             await session.commit()
     assert response.status_code == 503
     assert response.json() == {"status": "unavailable"}
+
+
+async def test_sync_repairs_dml_grants_for_a_previously_applied_migration(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    stream = next(stream for stream in engine_migration_streams() if stream.name == "horizon")
+    table_name = stream.migrations[0].table_names()[0]
+    async with sessionmaker() as session:
+        await session.execute(
+            text(f"REVOKE SELECT, INSERT, UPDATE, DELETE ON {table_name} FROM podium_app")
+        )
+        await session.commit()
+        granted = (
+            await session.execute(
+                text(
+                    "SELECT has_table_privilege("
+                    "'podium_app', :table_name, 'SELECT, INSERT, UPDATE, DELETE')"
+                ).bindparams(table_name=table_name)
+            )
+        ).scalar_one()
+        assert granted is False
+
+        connection = await session.connection()
+        await connection.run_sync(sync_engine_migrations)
+        await session.commit()
+        repaired = (
+            await session.execute(
+                text(
+                    "SELECT has_table_privilege("
+                    "'podium_app', :table_name, 'SELECT, INSERT, UPDATE, DELETE')"
+                ).bindparams(table_name=table_name)
+            )
+        ).scalar_one()
+    assert repaired is True
+
+
+async def test_sync_rejects_a_non_prefix_migration_history(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    stream = next(stream for stream in engine_migration_streams() if stream.name == "horizon")
+    first_migration = stream.migrations[0]
+    async with sessionmaker() as session:
+        await session.execute(
+            text(f"DELETE FROM {stream.metadata_table} WHERE id = :identifier").bindparams(
+                identifier=first_migration.id
+            )
+        )
+        await session.commit()
+    try:
+        async with sessionmaker() as session:
+            connection = await session.connection()
+            with pytest.raises(EngineMigrationNotReadyError, match="not a prefix"):
+                await connection.run_sync(sync_engine_migrations)
+    finally:
+        async with sessionmaker() as session, session.begin():
+            await session.execute(
+                text(
+                    f"INSERT INTO {stream.metadata_table} (id, checksum, applied_at) "
+                    "VALUES (:identifier, :checksum, now())"
+                ).bindparams(identifier=first_migration.id, checksum=first_migration.checksum)
+            )
