@@ -162,6 +162,7 @@ async def test_run_openapi_uses_named_typed_nested_schemas(api: httpx.AsyncClien
 
     assert run["properties"]["counts"] == {"$ref": "#/components/schemas/RunCounts"}
     assert run["properties"]["params"] == {"$ref": "#/components/schemas/RunParams"}
+    assert run["properties"]["status"] == {"$ref": "#/components/schemas/RunStatus"}
     assert schemas["RunCounts"]["additionalProperties"] is False
     assert schemas["RunParams"]["additionalProperties"] is False
 

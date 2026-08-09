@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from podium.runs.models import RunStatus
+
 
 class RunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -78,7 +80,7 @@ class RunOut(BaseModel):
     company_id: uuid.UUID
     directive: str
     idempotency_key: str
-    status: str
+    status: RunStatus
     error: str | None
     counts: RunCounts
     params: RunParams
