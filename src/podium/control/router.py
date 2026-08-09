@@ -6,12 +6,14 @@ reads run in a worker thread (the engine ledger is sync psycopg by design)."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar
 
 from chorus.errors import OrgInvariantViolation
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
@@ -459,15 +461,23 @@ async def approvals(
     )
 
 
+def _approval_etag(view: ApprovalView) -> str:
+    """A strong validator over every approval field the detail door returns."""
+    payload = json.dumps(view.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return f'"{hashlib.sha256(payload.encode()).hexdigest()}"'
+
+
 @router.get("/approvals/{approval_id}", response_model=ApprovalView)
 async def approval(
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
     approval_id: str,
+    request: Request,
+    response: Response,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
     provider: ControlPlaneProvider = Depends(get_control_provider),
-) -> ApprovalView:
+) -> ApprovalView | Response:
     """One persisted gate, including resolved and expired records."""
     await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
     view = await _plane_read(
@@ -478,6 +488,10 @@ async def approval(
     )
     if view is None:
         raise HTTPException(status_code=404, detail="approval not found")
+    etag = _approval_etag(view)
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
     return view
 
 

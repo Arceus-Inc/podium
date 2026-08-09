@@ -384,3 +384,43 @@ async def test_approval_detail_is_opaque_across_companies(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 404
+
+
+async def test_approval_detail_etag_revalidates_and_tracks_state(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    from chorus.ledger import Ledger
+
+    ws_id, company_id, token = await _mint(sessionmaker, "approval-etag")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    approval_id, _, _ = _seed_approval_detail(dsn, company_id)
+    path = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals/{approval_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first = await api.get(path, headers=headers)
+    second = await api.get(path, headers=headers)
+    assert first.status_code == 200
+    assert first.headers["etag"] == second.headers["etag"]
+    assert first.headers["etag"].startswith('"') and first.headers["etag"].endswith('"')
+
+    matched = await api.get(path, headers={**headers, "If-None-Match": first.headers["etag"]})
+    assert matched.status_code == 304
+    assert matched.content == b""
+    assert matched.headers["etag"] == first.headers["etag"]
+
+    nonmatching = await api.get(path, headers={**headers, "If-None-Match": '"different"'})
+    assert nonmatching.status_code == 200
+    assert nonmatching.json()["id"] == approval_id
+
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        ledger.approvals.approve(approval_id, decided_by_user_id="board-user")
+    finally:
+        ledger.close()
+
+    changed = await api.get(path, headers=headers)
+    assert changed.status_code == 200
+    assert changed.json()["status"] == "approved"
+    assert changed.headers["etag"] != first.headers["etag"]
