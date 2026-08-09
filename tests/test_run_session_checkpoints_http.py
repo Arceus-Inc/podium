@@ -18,6 +18,7 @@ from podium.companies import create_company
 from podium.db import tenant_session
 from podium.main import create_app
 from podium.runs import DurableArtifactRef, create_run, save_run_session_checkpoint
+from podium.users import create_user
 from podium.workspaces import create_workspace
 
 _SAVED_AT = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
@@ -252,6 +253,145 @@ async def test_company_scoped_key_only_lists_its_own_company_run(
     assert [checkpoint["session_id"] for checkpoint in own_response.json()] == ["own-session"]
     assert other_response.status_code == 404
     assert other_response.json() == {"error": {"code": "not_found", "message": "run not found"}}
+
+
+async def test_user_key_cannot_list_another_users_company_run_checkpoints(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="alpha", slug="alpha")
+        user = await create_user(
+            session, workspace_id=workspace.id, email="user@alpha.test", name="User"
+        )
+        other_user = await create_user(
+            session, workspace_id=workspace.id, email="other@alpha.test", name="Other"
+        )
+        other_company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            owner_user_id=other_user.id,
+            slug="other",
+            name="Other",
+        )
+        _, token = await create_api_key(
+            session, workspace_id=workspace.id, name="user key", user_id=user.id
+        )
+    async with tenant_session(app_sessionmaker, workspace.id) as session:
+        other_run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=other_company.id,
+            directive="other run",
+            idempotency_key="other-run",
+        )
+    await _save_checkpoint(
+        app_sessionmaker,
+        workspace_id=workspace.id,
+        run_id=other_run.id,
+        session_id="other-session",
+        saved_at=_SAVED_AT,
+        name="other",
+    )
+
+    response = await api.get(
+        f"/v1/companies/{other_company.id}/runs/{other_run.id}/session-checkpoints",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "not_found", "message": "run not found"}}
+
+
+async def test_user_key_lists_its_own_owned_company_run_checkpoints(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="alpha", slug="alpha")
+        user = await create_user(
+            session, workspace_id=workspace.id, email="user@alpha.test", name="User"
+        )
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            owner_user_id=user.id,
+            slug="owned",
+            name="Owned",
+        )
+        _, token = await create_api_key(
+            session, workspace_id=workspace.id, name="user key", user_id=user.id
+        )
+    async with tenant_session(app_sessionmaker, workspace.id) as session:
+        run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=company.id,
+            directive="owned run",
+            idempotency_key="owned-run",
+        )
+    await _save_checkpoint(
+        app_sessionmaker,
+        workspace_id=workspace.id,
+        run_id=run.id,
+        session_id="owned-session",
+        saved_at=_SAVED_AT,
+        name="owned",
+    )
+
+    response = await api.get(
+        f"/v1/companies/{company.id}/runs/{run.id}/session-checkpoints",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [checkpoint["session_id"] for checkpoint in response.json()] == ["owned-session"]
+
+
+async def test_service_key_lists_user_owned_company_run_checkpoints(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="alpha", slug="alpha")
+        user = await create_user(
+            session, workspace_id=workspace.id, email="user@alpha.test", name="User"
+        )
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            owner_user_id=user.id,
+            slug="owned",
+            name="Owned",
+        )
+        _, token = await create_api_key(session, workspace_id=workspace.id, name="service key")
+    async with tenant_session(app_sessionmaker, workspace.id) as session:
+        run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=company.id,
+            directive="owned run",
+            idempotency_key="owned-run",
+        )
+    await _save_checkpoint(
+        app_sessionmaker,
+        workspace_id=workspace.id,
+        run_id=run.id,
+        session_id="owned-session",
+        saved_at=_SAVED_AT,
+        name="owned",
+    )
+
+    response = await api.get(
+        f"/v1/companies/{company.id}/runs/{run.id}/session-checkpoints",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [checkpoint["session_id"] for checkpoint in response.json()] == ["owned-session"]
 
 
 async def test_checkpoint_paths_are_opaque_for_malformed_and_missing_identifiers(

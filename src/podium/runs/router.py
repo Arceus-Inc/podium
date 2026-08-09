@@ -107,6 +107,8 @@ async def list_session_checkpoints(
     if actor.company_id is not None and actor.company_id != parsed_company_id:
         _run_not_found()
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        if await get_company(session, parsed_company_id, user_id=actor.user_id) is None:
+            _run_not_found()
         run = await get_run(session, parsed_run_id)
         if run is None or run.company_id != parsed_company_id:
             _run_not_found()
