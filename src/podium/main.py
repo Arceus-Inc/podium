@@ -22,7 +22,7 @@ from podium.db import make_engine, make_sessionmaker
 from podium.dev import router as dev_router
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
-from podium.http_errors import install_error_handlers
+from podium.http_errors import install_error_handlers, install_problem_openapi, problem_responses
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
@@ -81,12 +81,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="podium", lifespan=lifespan)
+    app = FastAPI(
+        title="podium",
+        lifespan=lifespan,
+        responses=problem_responses(),  # type: ignore[arg-type]  # FastAPI's annotation is too broad.
+    )
     settings = get_settings()
     app.state.rate_limiter = SlidingWindowRateLimiter(
         max_requests=settings.rate_limit_max, window_seconds=settings.rate_limit_window_seconds
     )
     install_error_handlers(app)
+    install_problem_openapi(app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

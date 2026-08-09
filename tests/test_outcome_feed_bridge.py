@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from chorus.events import Event, EventKind
 from dream.contracts.strategy import LandedPhase, RecoveryHint
+
 from podium.conductor.company._bridge import ChorusOutcomeFeed
 
 _NOW = datetime.fromisoformat("2026-06-17T12:00:00+00:00")
