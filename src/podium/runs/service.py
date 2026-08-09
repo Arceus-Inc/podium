@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,12 @@ class RunRef:
     # Set on a run that already submitted its engine root — a reclaim resumes the watch on it
     # instead of re-submitting (found live 2026-07-18: a restart minted a duplicate root).
     engine_task_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunCursor:
+    created_at: datetime
+    id: uuid.UUID
 
 
 def _now() -> datetime:
@@ -100,6 +106,26 @@ async def get_run(
 
 async def list_runs(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Run]:
     stmt = select(Run).where(Run.company_id == company_id).order_by(Run.created_at.desc())
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def list_runs_page(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    *,
+    cursor: RunCursor | None,
+    limit: int,
+) -> Sequence[Run]:
+    """A bounded, newest-first run page using `(created_at, id)` as its stable keyset."""
+    stmt = select(Run).where(Run.company_id == company_id)
+    if cursor is not None:
+        stmt = stmt.where(
+            or_(
+                Run.created_at < cursor.created_at,
+                and_(Run.created_at == cursor.created_at, Run.id < cursor.id),
+            )
+        )
+    stmt = stmt.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit)
     return (await session.execute(stmt)).scalars().all()
 
 

@@ -86,3 +86,13 @@ class RunOut(BaseModel):
     params: RunParams
     created_at: datetime
     updated_at: datetime
+
+
+class RunPageMeta(BaseModel):
+    next_cursor: str | None
+    has_more: bool
+
+
+class RunPage(BaseModel):
+    data: list[RunOut]
+    meta: RunPageMeta
