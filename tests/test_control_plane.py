@@ -13,9 +13,12 @@ import uuid
 import pytest
 
 from podium.control import CompanyControlPlane, ControlPlaneProvider
-from podium.control._governance import ReflectionProposalAlreadyReviewedError
+from podium.control._governance import (
+    ReflectionApplicationAlreadyAuthorizedError,
+    ReflectionProposalAlreadyReviewedError,
+)
 from podium.control._observe import UnknownReflectionProposalError
-from reflection_proposal_support import create_reflection_proposal
+from reflection_proposal_support import create_application_run, create_reflection_proposal
 
 pytestmark = pytest.mark.anyio
 
@@ -313,6 +316,49 @@ def test_governance_facade_records_authenticated_reflection_review(
                 verdict=verdict,
                 by="founder",
                 reason="A second final verdict must fail.",
+            )
+    finally:
+        plane.close()
+
+
+def test_governance_facade_authorizes_one_separate_application_run(
+    database_url: str,
+    provider: ControlPlaneProvider,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix="authorization")
+    application_run = create_application_run(
+        database_url,
+        company_id,
+        suffix="authorization",
+    )
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        review = plane.governance.review_reflection_proposal(
+            proposal.artifact_revision_id,
+            verdict="accepted",
+            by="founder",
+            reason="The visible diff is approved for a separate run.",
+        )
+
+        authorization = plane.governance.authorize_reflection_application(
+            proposal.artifact_revision_id,
+            application_run_id=application_run.id,
+            by="founder",
+        )
+
+        assert authorization.proposal_artifact_revision_id == proposal.artifact_revision_id
+        assert authorization.review_id == review.id
+        assert authorization.proposal_source_run_id == proposal.source_run_id
+        assert authorization.application_run_id == application_run.id
+        assert authorization.authorized_by_user_id == "founder"
+        assert authorization.created_at is not None
+
+        with pytest.raises(ReflectionApplicationAlreadyAuthorizedError):
+            plane.governance.authorize_reflection_application(
+                proposal.artifact_revision_id,
+                application_run_id=application_run.id,
+                by="founder",
             )
     finally:
         plane.close()

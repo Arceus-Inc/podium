@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 from chorus.ids import mint_id
 from chorus.ledger import (
     LedgerIntegrityError,
+    ReflectionApplicationAuthorization,
     ReflectionProposalReview,
     ReflectionProposalVerdict,
 )
@@ -35,6 +36,32 @@ class PlanConflictError(ValueError):
 
 class ReflectionProposalAlreadyReviewedError(ValueError):
     """The proposal revision already has its one final human verdict."""
+
+
+class ReflectionApplicationAlreadyAuthorizedError(ValueError):
+    """The proposal already has its single-use application authorization."""
+
+
+class ReflectionApplicationConflictError(ValueError):
+    """The accepted review or queued-run invariants do not authorize this handoff."""
+
+
+class UnknownApplicationRunError(ValueError):
+    """No such application run in this company."""
+
+
+class ReflectionApplicationAuthorizationView(BaseModel):
+    """The auditable handoff from an accepted proposal to one separate queued run."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    proposal_artifact_revision_id: str
+    review_id: str
+    proposal_source_run_id: str
+    application_run_id: str
+    authorized_by_user_id: str
+    created_at: datetime
 
 
 class ReflectionProposalReviewView(BaseModel):
@@ -197,6 +224,67 @@ class GovernanceFacade:
             created_at=recorded.created_at,
         )
 
+    def authorize_reflection_application(
+        self,
+        artifact_revision_id: str,
+        *,
+        application_run_id: str,
+        by: str,
+    ) -> ReflectionApplicationAuthorizationView:
+        """Bind an accepted review to one existing queued run without executing that run."""
+        try:
+            uuid.UUID(artifact_revision_id)
+        except ValueError:
+            raise UnknownReflectionProposalError(artifact_revision_id) from None
+        proposal = self._ledger.reflection_proposals.get(artifact_revision_id)
+        if proposal is None:
+            raise UnknownReflectionProposalError(artifact_revision_id)
+        if (
+            self._ledger.reflection_application_authorizations.for_proposal(
+                artifact_revision_id
+            )
+            is not None
+        ):
+            raise ReflectionApplicationAlreadyAuthorizedError(artifact_revision_id)
+
+        review = self._ledger.reflection_proposal_reviews.accepted(artifact_revision_id)
+        if review is None or review.reviewer_user_id != by:
+            raise ReflectionApplicationConflictError(
+                "reflection application requires the authenticated reviewer's accepted verdict"
+            )
+        try:
+            uuid.UUID(application_run_id)
+        except ValueError:
+            raise UnknownApplicationRunError(application_run_id) from None
+        if self._ledger.runs.get(application_run_id) is None:
+            raise UnknownApplicationRunError(application_run_id)
+
+        authorization = ReflectionApplicationAuthorization(
+            id=mint_id(),
+            proposal_artifact_revision_id=artifact_revision_id,
+            review_id=review.id,
+            proposal_source_run_id=proposal.source_run_id,
+            application_run_id=application_run_id,
+            authorized_by_user_id=by,
+        )
+        try:
+            recorded = self._ledger.reflection_application_authorizations.issue(authorization)
+        except LedgerIntegrityError as exc:
+            raise ReflectionApplicationAlreadyAuthorizedError(artifact_revision_id) from exc
+        except ValueError as exc:
+            raise ReflectionApplicationConflictError(str(exc)) from exc
+        if recorded.created_at is None:
+            raise RuntimeError("persisted reflection application authorization is missing created_at")
+        return ReflectionApplicationAuthorizationView(
+            id=recorded.id,
+            proposal_artifact_revision_id=recorded.proposal_artifact_revision_id,
+            review_id=recorded.review_id,
+            proposal_source_run_id=recorded.proposal_source_run_id,
+            application_run_id=recorded.application_run_id,
+            authorized_by_user_id=recorded.authorized_by_user_id,
+            created_at=recorded.created_at,
+        )
+
     def _decide(self, plan_id: str, *, by: str, approve: bool) -> PlanView:
         import uuid
 
@@ -226,7 +314,11 @@ __all__ = [
     "PlanConflictError",
     "PlanView",
     "PlannedEmployeeView",
+    "ReflectionApplicationAlreadyAuthorizedError",
+    "ReflectionApplicationAuthorizationView",
+    "ReflectionApplicationConflictError",
     "ReflectionProposalAlreadyReviewedError",
     "ReflectionProposalReviewView",
+    "UnknownApplicationRunError",
     "UnknownPlanError",
 ]

@@ -115,4 +115,34 @@ def create_reflection_proposal(
         ledger.close()
 
 
-__all__ = ["create_reflection_proposal"]
+def create_application_run(
+    database_url: str,
+    company_id: uuid.UUID,
+    *,
+    suffix: str,
+    status: RunStatus = RunStatus.QUEUED,
+) -> Run:
+    """Create the pre-existing run that may receive accepted proposal authority."""
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        employee_id = f"application-agent-{suffix}"
+        ledger.employees.create(
+            Employee(id=employee_id, name="Application Agent", role="engineer")
+        )
+        task = ledger.tasks.submit(
+            Task(id=mint_id(), intent="apply one accepted reflection proposal")
+        )
+        return ledger.runs.create(
+            Run(
+                id=mint_id(),
+                employee_id=employee_id,
+                task_id=task.id,
+                status=status,
+            )
+        )
+    finally:
+        ledger.close()
+
+
+__all__ = ["create_application_run", "create_reflection_proposal"]

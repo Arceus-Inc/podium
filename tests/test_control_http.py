@@ -18,12 +18,15 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
-from podium.control._governance import ReflectionProposalReviewView
+from podium.control._governance import (
+    ReflectionApplicationAuthorizationView,
+    ReflectionProposalReviewView,
+)
 from podium.control._observe import ReflectionProposalView
 from podium.main import create_app
 from podium.users import create_user
 from podium.workspaces import create_workspace
-from reflection_proposal_support import create_reflection_proposal
+from reflection_proposal_support import create_application_run, create_reflection_proposal
 
 
 @pytest_asyncio.fixture
@@ -406,6 +409,91 @@ async def test_reflection_proposal_review_door_records_one_authenticated_human_v
     )
     assert isolated.status_code == 404
     assert isolated.json()["error"]["message"] == "reflection proposal not found"
+
+
+async def test_reflection_application_authorization_binds_one_existing_queued_run(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, service_token = await _seed_company(
+        sessionmaker,
+        slug="application",
+    )
+    async with sessionmaker() as session, session.begin():
+        reviewer = await create_user(
+            session,
+            workspace_id=workspace_id,
+            email="application-reviewer@example.com",
+            name="Application reviewer",
+        )
+        _, token = await create_api_key(
+            session,
+            workspace_id=workspace_id,
+            user_id=reviewer.id,
+            name="application-reviewer-key",
+        )
+    proposal = create_reflection_proposal(database_url, company_id, suffix="application-http")
+    application_run = create_application_run(
+        database_url,
+        company_id,
+        suffix="application-http",
+    )
+    headers = httpx.Headers(
+        (
+            ("Authorization", f"Bearer {token}"),
+            ("Content-Type", "application/json"),
+        )
+    )
+    proposal_url = (
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}"
+    )
+    review_response = await api.post(
+        f"{proposal_url}/reviews",
+        headers=headers,
+        content='{"verdict":"accepted","reason":"Approved for a separate run."}',
+    )
+    assert review_response.status_code == 201
+
+    authorization_url = f"{proposal_url}/application-authorizations"
+    body = f'{{"application_run_id":"{application_run.id}"}}'
+    service_denied = await api.post(
+        authorization_url,
+        headers=httpx.Headers(
+            (
+                ("Authorization", f"Bearer {service_token}"),
+                ("Content-Type", "application/json"),
+            )
+        ),
+        content=body,
+    )
+    assert service_denied.status_code == 403
+    assert service_denied.json()["error"]["message"] == "human reviewer required"
+
+    response = await api.post(authorization_url, headers=headers, content=body)
+
+    assert response.status_code == 201
+    authorization = ReflectionApplicationAuthorizationView.model_validate(response.json())
+    review = ReflectionProposalReviewView.model_validate(review_response.json())
+    assert authorization.proposal_artifact_revision_id == proposal.artifact_revision_id
+    assert authorization.review_id == review.id
+    assert authorization.application_run_id == application_run.id
+    assert authorization.authorized_by_user_id == str(reviewer.id)
+
+    duplicate = await api.post(authorization_url, headers=headers, content=body)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["message"] == "reflection application already authorized"
+
+    spoofed = await api.post(
+        authorization_url,
+        headers=headers,
+        content=(
+            f'{{"application_run_id":"{application_run.id}",'
+            '"authorized_by_user_id":"client-controlled"}'
+        ),
+    )
+    assert spoofed.status_code == 422
 
 
 async def test_patch_goal_archives_it(
