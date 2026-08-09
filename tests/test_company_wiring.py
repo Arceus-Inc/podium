@@ -24,7 +24,7 @@ def _config(tmp_path: Path, database_url: str) -> CompanyConfig:
         base_url="https://example.invalid/openai/v1",
         deployment="gpt-test",
         workdir=tmp_path,
-        company_id=str(uuid4()),
+        company_id=uuid4(),
         ledger_dsn=database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@"),
     )
 
@@ -108,7 +108,7 @@ def test_build_wires_token_pricing_into_both_factories(tmp_path: Path, database_
             base_url="https://x/openai/v1",
             deployment="gpt-x",
             workdir=tmp_path,
-            company_id=str(uuid4()),
+            company_id=uuid4(),
             ledger_dsn=_pg_conninfo(database_url, user="podium_app"),
         )
     )

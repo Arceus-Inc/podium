@@ -61,7 +61,7 @@ async def test_migration_creates_engine_tables_with_grants_and_rls(
 def test_company_graph_runs_on_the_shared_postgres_ledger(
     database_url: str, tmp_path: Path
 ) -> None:
-    company_id = str(uuid4())
+    company_id = uuid4()
     graph = build(
         CompanyConfig(
             **_FAKE_MODEL,
@@ -80,19 +80,19 @@ def test_company_graph_runs_on_the_shared_postgres_ledger(
             str(row[0])
             for row in admin.execute("SELECT DISTINCT company_id FROM employee").fetchall()
         }
-        assert company_id in employee_companies
+        assert str(company_id) in employee_companies
         row = admin.execute(
             "SELECT company_id, intent FROM task WHERE id = %s", (task.id,)
         ).fetchone()
         assert row is not None
-        assert (str(row[0]), row[1]) == (company_id, "write the launch plan")
+        assert (str(row[0]), row[1]) == (str(company_id), "write the launch plan")
     # And no SQLite file was created — Postgres is the store, not a mirror.
     assert not (tmp_path / "co" / "ledger.db").exists()
 
 
 def test_two_postgres_companies_are_isolated(database_url: str, tmp_path: Path) -> None:
     dsn = _pg_conninfo(database_url, user="podium_app")
-    id_a, id_b = str(uuid4()), str(uuid4())
+    id_a, id_b = uuid4(), uuid4()
     graph_a = build(
         CompanyConfig(**_FAKE_MODEL, workdir=tmp_path / "a", company_id=id_a, ledger_dsn=dsn)
     )
@@ -168,9 +168,9 @@ async def test_host_without_dsn_fails_loud(
     await host.aclose()
 
 
-def test_non_uuid_company_id_is_rejected_for_postgres(tmp_path: Path) -> None:
-    """The RLS GUC casts to uuid — a non-uuid company id must fail at build time, not mid-query."""
-    with pytest.raises(ValueError, match="uuid"):
+def test_non_uuid_company_id_is_rejected_at_the_composition_boundary(tmp_path: Path) -> None:
+    """CompanyConfig keeps UUIDs until the explicit conversion at the Chorus boundary."""
+    with pytest.raises(TypeError, match="UUID"):
         build(
             CompanyConfig(
                 **_FAKE_MODEL,
