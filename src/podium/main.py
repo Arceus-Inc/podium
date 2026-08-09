@@ -24,6 +24,7 @@ from podium.events.router import router as events_router
 from podium.http_errors import cache_problem_openapi, install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
+from podium.product_events.router import router as product_events_router
 from podium.runs.router import router as runs_router
 from podium.settings import get_settings
 from podium.stream_tickets.router import router as stream_tickets_router
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(companies_router)
     app.include_router(runs_router)
     app.include_router(events_router)
+    app.include_router(product_events_router)
     app.include_router(stream_tickets_router)
     app.include_router(control_router)
     app.include_router(timeline_router)

@@ -8,7 +8,9 @@ paths (401 / cross-tenant 404).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import cast
 
 import httpx
 import pytest_asyncio
@@ -44,7 +46,7 @@ async def broadcaster(database_url: str) -> AsyncIterator[Broadcaster]:
 
 async def _setup(
     admin: async_sessionmaker[AsyncSession], app: async_sessionmaker[AsyncSession], *, n: int
-) -> tuple[str, str, str, EventMirror]:
+) -> tuple[uuid.UUID, uuid.UUID, str, EventMirror]:
     """Company + run + key + `n` mirrored events. Returns (workspace_id, company_id, token, mirror)."""
     async with admin() as s, s.begin():
         ws = await create_workspace(s, name="A", slug="a")
@@ -81,8 +83,8 @@ async def _consume_ids(gen: AsyncIterator[str], count: int, *, timeout: float = 
 def _stream(
     broadcaster: Broadcaster,
     sm: async_sessionmaker[AsyncSession],
-    ws_id: str,
-    company_id: str,
+    ws_id: uuid.UUID,
+    company_id: uuid.UUID,
     cursor: int,
 ) -> AsyncIterator[str]:
     return event_stream(
@@ -105,7 +107,7 @@ async def test_replays_history(
     try:
         assert await _consume_ids(gen, 3) == ["1", "2", "3"]
     finally:
-        await gen.aclose()
+        await cast(AsyncGenerator[str, None], gen).aclose()
 
 
 async def test_tails_a_live_event(
@@ -121,7 +123,7 @@ async def test_tails_a_live_event(
         await mirror.record(type="run.started", payload={}, task_id="t")
         assert await reader == ["1"]
     finally:
-        await gen.aclose()
+        await cast(AsyncGenerator[str, None], gen).aclose()
 
 
 async def test_resumes_after_reconnect_without_gaps_or_dupes(
@@ -134,7 +136,7 @@ async def test_resumes_after_reconnect_without_gaps_or_dupes(
     try:
         assert await _consume_ids(gen1, 2) == ["1", "2"]  # read 1,2 then "disconnect"
     finally:
-        await gen1.aclose()
+        await cast(AsyncGenerator[str, None], gen1).aclose()
 
     await mirror.record(type="run.done", payload={}, task_id="t")  # event 4 lands while away
 
@@ -142,7 +144,7 @@ async def test_resumes_after_reconnect_without_gaps_or_dupes(
     try:
         assert await _consume_ids(gen2, 2) == ["3", "4"]  # 3 and 4, never re-deliver 1/2
     finally:
-        await gen2.aclose()
+        await cast(AsyncGenerator[str, None], gen2).aclose()
 
 
 # --- HTTP-level (immediate-return paths only) -----------------------------------------------------
@@ -167,6 +169,16 @@ async def test_stream_requires_auth(
 ) -> None:
     _ws, company_id, _t, _m = await _setup(sessionmaker, app_sessionmaker, n=1)
     assert (await api.get(f"/v1/companies/{company_id}/stream")).status_code == 401
+
+
+async def test_raw_stream_rejects_query_credentials(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    _ws, company_id, token, _m = await _setup(sessionmaker, app_sessionmaker, n=1)
+    assert (await api.get(f"/v1/companies/{company_id}/stream?access_token={token}")).status_code == 401
+    assert (await api.get(f"/v1/companies/{company_id}/stream?ticket=abc123_def456_ghi789_jkl012mno345pqrs")).status_code == 401
 
 
 async def test_stream_foreign_company_is_not_found(
