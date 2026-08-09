@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
 from podium.runs.service import (
+    IdempotencyKeyReuseError,
     RunRef,
     active_engine_tasks,
     claim_queued_run,
@@ -16,6 +17,7 @@ from podium.runs.service import (
     reclaim_run,
     renew_lease,
     request_cancel,
+    request_fingerprint,
     rollup_run_counts,
     set_engine_task_id,
     set_log_ref,
@@ -23,6 +25,7 @@ from podium.runs.service import (
 
 __all__ = [
     "TERMINAL_STATUSES",
+    "IdempotencyKeyReuseError",
     "Run",
     "RunRef",
     "RunStatus",
@@ -37,6 +40,7 @@ __all__ = [
     "reclaim_run",
     "renew_lease",
     "request_cancel",
+    "request_fingerprint",
     "rollup_run_counts",
     "set_engine_task_id",
     "set_log_ref",

@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import create_api_key
 from podium.companies import create_company
+from podium.db import tenant_session
 from podium.main import create_app
+from podium.runs import RunStatus, claim_queued_run, finalize_run
 from podium.workspaces import create_workspace
 
 
@@ -40,14 +42,92 @@ async def test_create_run_is_idempotent_over_http(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     token, a_company, _b = await _setup(sessionmaker)
-    headers = {"Authorization": f"Bearer {token}"}
-    body = {"directive": "ship it", "idempotency_key": "k1"}
-    first = await api.post(f"/v1/companies/{a_company}/runs", json=body, headers=headers)
-    second = await api.post(f"/v1/companies/{a_company}/runs", json=body, headers=headers)
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
+    first = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
     assert first.status_code == 202, first.text
     assert first.json()["status"] == "queued"
-    assert second.status_code == 202
-    assert second.json()["id"] == first.json()["id"]  # same key → same run
+
+
+async def test_create_run_accepts_deprecated_body_idempotency_key(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        json={"directive": "ship it", "idempotency_key": "k1"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 202
+
+
+async def test_create_run_rejects_missing_or_conflicting_idempotency_keys(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    headers = {"Authorization": f"Bearer {token}"}
+    missing = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    conflicting = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        json={"directive": "ship it", "idempotency_key": "body-key"},
+        headers={**headers, "Idempotency-Key": "header-key"},
+    )
+    assert missing.status_code == 422
+    assert conflicting.status_code == 422
+
+
+async def test_in_progress_idempotency_replay_returns_problem_and_retry_after(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
+    created = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    replay = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    assert created.status_code == 202
+    assert replay.status_code == 409
+    assert replay.json()["type"] == "urn:podium:problem:idempotency_in_progress"
+    assert replay.headers["Retry-After"] == "1"
+
+
+async def test_completed_idempotency_replay_returns_existing_resource(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
+    created = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    run_id = created.json()["id"]
+    workspace_id = created.json()["workspace_id"]
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        assert await claim_queued_run(session, run_id, owner="worker", lease_seconds=60)
+        assert await finalize_run(session, run_id, owner="worker", status=RunStatus.SUCCEEDED)
+    replay = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    assert replay.status_code == 200
+    assert replay.json()["id"] == run_id
+    assert replay.headers["Idempotency-Replayed"] == "true"
+
+
+async def test_idempotency_key_reuse_returns_problem(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    headers = {"Authorization": f"Bearer {token}", "Idempotency-Key": "k1"}
+    await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "ship it"}, headers=headers)
+    reuse = await api.post(f"/v1/companies/{a_company}/runs", json={"directive": "change scope"}, headers=headers)
+    assert reuse.status_code == 422
+    assert reuse.json()["type"] == "urn:podium:problem:idempotency_key_reuse"
+
+
+async def test_run_idempotency_openapi_documents_header_and_body_deprecation(
+    api: httpx.AsyncClient,
+) -> None:
+    schema = (await api.get("/openapi.json")).json()
+    operation = schema["paths"]["/v1/companies/{company_id}/runs"]["post"]
+    header = next(parameter for parameter in operation["parameters"] if parameter["name"] == "Idempotency-Key")
+    assert header["in"] == "header"
+    body_schema = schema["components"]["schemas"]["RunCreate"]
+    assert body_schema["properties"]["idempotency_key"]["deprecated"] is True
+    assert "Idempotency-Replayed" in operation["responses"]["200"]["headers"]
 
 
 async def test_get_run_returns_status(

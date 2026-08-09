@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.companies import create_company
 from podium.db import tenant_session
 from podium.runs import (
+    IdempotencyKeyReuseError,
     RunStatus,
     claim_queued_run,
     create_run,
@@ -15,6 +19,7 @@ from podium.runs import (
     reclaim_run,
     renew_lease,
     request_cancel,
+    request_fingerprint,
 )
 from podium.workspaces import create_workspace
 
@@ -42,6 +47,54 @@ async def test_create_run_is_idempotent(
     assert created_again is False
     assert run.id == again.id
     assert run.status == RunStatus.QUEUED
+    assert run.request_fingerprint == request_fingerprint(directive="ship it", params=None)
+
+
+async def test_create_run_rejects_same_key_for_different_execution(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    ws_id, company_id = await _workspace_with_company(sessionmaker)
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        await create_run(
+            s,
+            workspace_id=ws_id,
+            company_id=company_id,
+            directive="ship it",
+            idempotency_key="k1",
+            params={"execution_mode": "delivery"},
+        )
+        with pytest.raises(IdempotencyKeyReuseError):
+            await create_run(
+                s,
+                workspace_id=ws_id,
+                company_id=company_id,
+                directive="change the scope",
+                idempotency_key="k1",
+                params={"execution_mode": "delivery"},
+            )
+
+
+async def test_create_run_is_concurrency_safe(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    ws_id, company_id = await _workspace_with_company(sessionmaker)
+
+    async def create_once() -> tuple[object, bool]:
+        async with tenant_session(app_sessionmaker, ws_id) as s:
+            return await create_run(
+                s,
+                workspace_id=ws_id,
+                company_id=company_id,
+                directive="ship it",
+                idempotency_key="k1",
+                params={"execution_mode": "delivery"},
+            )
+
+    first, second = await asyncio.gather(create_once(), create_once())
+    assert first[0].id == second[0].id
+    assert sorted((first[1], second[1])) == [False, True]
 
 
 async def test_claim_is_compare_and_swap(

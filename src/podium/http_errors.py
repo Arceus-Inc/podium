@@ -63,6 +63,21 @@ class ProblemDetails(BaseModel):
     errors: tuple[ValidationErrorItem, ...] | None = None
 
 
+class ProblemHTTPException(StarletteHTTPException):
+    """An HTTP exception with an explicit RFC 9457 problem type."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        code: str,
+        detail: str,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail, headers=headers)
+        self.code = code
+
+
 def get_request_id() -> str:
     """Return the request ID for the current HTTP handler or exception handler."""
     return _REQUEST_ID.get()
@@ -121,8 +136,9 @@ def _problem_response(
 async def _on_http_exception(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)
     status = exc.status_code
+    code = exc.code if isinstance(exc, ProblemHTTPException) else _STATUS_CODES.get(status, "error")
     return _problem_response(
-        _problem(request, status=status, code=_STATUS_CODES.get(status, "error"), detail=str(exc.detail)),
+        _problem(request, status=status, code=code, detail=str(exc.detail)),
         headers=exc.headers,
     )
 

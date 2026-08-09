@@ -13,17 +13,26 @@ import base64
 import binascii
 import uuid
 from datetime import UTC, datetime
+from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_sessionmaker
 from podium.companies import get_company
 from podium.db import tenant_session
+from podium.http_errors import ProblemHTTPException
 from podium.logs import RunLogStore
 from podium.runs.schemas import RunCreate, RunOut, RunPage, RunPageLinks, RunPageMeta
-from podium.runs.service import RunCursor, create_run, get_run, list_runs_page, request_cancel
+from podium.runs.service import (
+    IdempotencyKeyReuseError,
+    RunCursor,
+    create_run,
+    get_run,
+    list_runs_page,
+    request_cancel,
+)
 
 router = APIRouter(prefix="/v1", tags=["runs"])
 
@@ -102,26 +111,73 @@ async def _read_run(
     status_code=202,
     response_model=RunOut,
     response_model_exclude_unset=True,
+    responses={
+        200: {
+            "model": RunOut,
+            "headers": {
+                "Idempotency-Replayed": {
+                    "description": "True when this terminal run is an idempotent replay.",
+                    "schema": {"type": "boolean"},
+                }
+            },
+        }
+    },
 )
 async def create(
     company_id: uuid.UUID,
     body: RunCreate,
+    response: Response,
+    header_idempotency_key: Annotated[
+        str | None,
+        Header(
+            alias="Idempotency-Key",
+            description="Preferred idempotency key for run creation; the request-body alias is deprecated.",
+            min_length=1,
+        ),
+    ] = None,
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> RunOut:
+    body_idempotency_key = body.idempotency_key
+    if (
+        header_idempotency_key is not None
+        and body_idempotency_key is not None
+        and header_idempotency_key != body_idempotency_key
+    ):
+        raise HTTPException(status_code=422, detail="Idempotency-Key conflicts with idempotency_key")
+    idempotency_key = header_idempotency_key or body_idempotency_key
+    if idempotency_key is None:
+        raise HTTPException(status_code=422, detail="Idempotency-Key is required")
     _authorize(actor, "create", company_id)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
         if await get_company(session, company_id, user_id=actor.user_id) is None:
             raise HTTPException(status_code=404, detail="company not found")
-        run, _created = await create_run(
-            session,
-            workspace_id=actor.workspace_id,
-            company_id=company_id,
-            directive=body.directive,
-            idempotency_key=body.idempotency_key,
-            params=body.params().model_dump(exclude_none=True),
-        )
-        return RunOut.model_validate(run)
+        try:
+            run, created = await create_run(
+                session,
+                workspace_id=actor.workspace_id,
+                company_id=company_id,
+                directive=body.directive,
+                idempotency_key=idempotency_key,
+                params=body.params().model_dump(exclude_none=True),
+            )
+        except IdempotencyKeyReuseError as exc:
+            raise ProblemHTTPException(
+                status_code=422,
+                code="idempotency_key_reuse",
+                detail="Idempotency-Key was already used for a different run request",
+            ) from exc
+    if not created:
+        if run.status not in TERMINAL_STATUSES:
+            raise ProblemHTTPException(
+                status_code=409,
+                code="idempotency_in_progress",
+                detail="The idempotent run request is still in progress",
+                headers={"Retry-After": "1"},
+            )
+        response.status_code = 200
+        response.headers["Idempotency-Replayed"] = "true"
+    return RunOut.model_validate(run)
 
 
 @router.get(

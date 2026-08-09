@@ -5,11 +5,14 @@ Callers pass a `tenant_session`; RLS scopes every statement to the run's workspa
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +21,27 @@ from podium.companies import get_company
 from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
 
 _CONDUCTOR_CHANNEL = "podium_conductor"
+
+
+class IdempotencyKeyReuseError(Exception):
+    """A client reused a key for a request whose execution would differ."""
+
+
+class RunRequestFingerprint(BaseModel):
+    """The stable input to idempotent run creation, excluding its idempotency key."""
+
+    model_config = ConfigDict(frozen=True)
+
+    directive: str
+    execution_params: dict[str, object]
+
+
+def request_fingerprint(*, directive: str, params: dict[str, object] | None) -> str:
+    request = RunRequestFingerprint(directive=directive, execution_params=params or {})
+    canonical = json.dumps(
+        request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -57,6 +81,7 @@ async def create_run(
 
     The id is DB-minted (uuidv7 server default) and comes back through RETURNING.
     """
+    request_fingerprint_value = request_fingerprint(directive=directive, params=params)
     now = _now()
     stmt = (
         pg_insert(Run)
@@ -65,6 +90,7 @@ async def create_run(
             company_id=company_id,
             directive=directive,
             idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint_value,
             params=params or {},
             status=RunStatus.QUEUED,
             counts={},
@@ -83,6 +109,8 @@ async def create_run(
                 )
             )
         ).scalar_one()
+        if existing.request_fingerprint != request_fingerprint_value:
+            raise IdempotencyKeyReuseError
         return existing, False
     # Wake the conductor in the same transaction that created the work.
     await session.execute(

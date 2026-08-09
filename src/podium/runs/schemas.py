@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from podium.runs.models import RunStatus
 
@@ -15,7 +15,9 @@ class RunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     directive: str
-    idempotency_key: str
+    idempotency_key: str | None = Field(
+        default=None, min_length=1, json_schema_extra={"deprecated": True}
+    )
     # One run resource; execution_mode discriminates (M4 §3.3). Delegation params are
     # meaningful only in delegation mode and required there — fail at the door. Formation
     # routes to the CEO, whose proposal waits at the /plans human boundary (CO1).
