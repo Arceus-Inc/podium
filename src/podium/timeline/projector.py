@@ -13,7 +13,7 @@ from chorus.events import EventKind
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.db import tenant_session
-from podium.events import Event, list_company_events, max_company_seq
+from podium.events import Event, EventChannel, list_company_events, max_company_seq
 from podium.timeline import repository
 from podium.timeline.mapping import TimelinePayloadError, map_timeline_event
 from podium.timeline.service import (
@@ -207,13 +207,13 @@ class TimelineProjector:
                 self._company_id,
                 after=last_projected_seq,
                 limit=_BATCH_SIZE,
+                channel=None,
             )
             if not events:
                 return self._healthy_attempt(last_projected_seq, latest_event_seq)
             for event in events:
                 try:
-                    chorus_event = chorus_event_from_durable(event)
-                    mapped = map_timeline_event(chorus_event, source_event_seq=event.seq)
+                    mapped = _map_durable_event(event)
                     item, exclusion = _projection_input(mapped)
                     await project_timeline_event(
                         session,
@@ -321,6 +321,14 @@ class TimelineProjector:
             failure_type=lag.failure_type,
             failure_message=lag.failure_message,
         )
+
+
+def _map_durable_event(event: Event) -> TimelineItemDraft | TimelineExclusion:
+    """Normalized product rows are terminal output, never fresh timeline input."""
+    if event.channel == EventChannel.PRODUCT:
+        return TimelineExclusion(source_event_seq=event.seq)
+    chorus_event = chorus_event_from_durable(event)
+    return map_timeline_event(chorus_event, source_event_seq=event.seq)
 
 
 def _projection_input(
