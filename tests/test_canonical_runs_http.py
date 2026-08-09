@@ -122,6 +122,8 @@ async def test_canonical_run_pages_have_stable_ties_without_duplicates(
     assert [run.id for run in first.data] == sorted(run_ids, reverse=True)[:2]
     assert first.meta.has_more is True
     assert first.meta.next_cursor is not None
+    assert first.links.self == f"{path}?limit=2"
+    assert first.links.next == f"{path}?cursor={first.meta.next_cursor}&limit=2"
 
     second_response = await api.get(
         f"{path}?limit=2&cursor={first.meta.next_cursor}", headers=_auth(token)
@@ -130,6 +132,8 @@ async def test_canonical_run_pages_have_stable_ties_without_duplicates(
     second = RunPage.model_validate(second_response.json())
     assert second.meta.has_more is False
     assert second.meta.next_cursor is None
+    assert second.links.self == f"{path}?cursor={first.meta.next_cursor}&limit=2"
+    assert second.links.next is None
     returned_ids = [run.id for run in first.data + second.data]
     assert len(returned_ids) == len(set(returned_ids))
     assert set(returned_ids) == set(run_ids)
@@ -141,5 +145,6 @@ async def test_canonical_run_list_rejects_invalid_queries(
     workspace_id, company_id, token, _run_ids = await _seed_runs(sessionmaker, count=1)
     path = _runs_path(workspace_id, company_id)
     assert (await api.get(f"{path}?cursor=not-a-cursor", headers=_auth(token))).status_code == 422
+    assert (await api.get(f"{path}?cursor={'a' * 513}", headers=_auth(token))).status_code == 422
     assert (await api.get(f"{path}?limit=201", headers=_auth(token))).status_code == 422
     assert (await api.get(f"{path}?unexpected=true", headers=_auth(token))).status_code == 422

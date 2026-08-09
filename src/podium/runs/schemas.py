@@ -89,10 +89,22 @@ class RunOut(BaseModel):
 
 
 class RunPageMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     next_cursor: str | None
     has_more: bool
 
 
+class RunPageLinks(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    self: str
+    next: str | None
+
+
 class RunPage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     data: list[RunOut]
     meta: RunPageMeta
+    links: RunPageLinks

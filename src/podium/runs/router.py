@@ -13,6 +13,7 @@ import base64
 import binascii
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,7 +22,7 @@ from podium.auth import Actor, Resource, decide, enforce_rate_limit, get_session
 from podium.companies import get_company
 from podium.db import tenant_session
 from podium.logs import RunLogStore
-from podium.runs.schemas import RunCreate, RunOut, RunPage, RunPageMeta
+from podium.runs.schemas import RunCreate, RunOut, RunPage, RunPageLinks, RunPageMeta
 from podium.runs.service import RunCursor, create_run, get_run, list_runs_page, request_cancel
 
 router = APIRouter(prefix="/v1", tags=["runs"])
@@ -71,6 +72,16 @@ def _encode_cursor(created_at: datetime, run_id: uuid.UUID) -> str:
 def _validate_list_query(request: Request) -> None:
     if set(request.query_params) - {"cursor", "limit"}:
         raise HTTPException(status_code=422, detail="unexpected query parameter")
+
+
+def _canonical_runs_url(
+    workspace_id: uuid.UUID, company_id: uuid.UUID, *, cursor: str | None, limit: int
+) -> str:
+    path = f"/v1/workspaces/{workspace_id}/companies/{company_id}/runs"
+    query: list[tuple[str, str]] = [("limit", str(limit))]
+    if cursor is not None:
+        query.insert(0, ("cursor", cursor))
+    return f"{path}?{urlencode(query)}"
 
 
 async def _read_run(
@@ -153,7 +164,7 @@ async def list_canonical(
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
     request: Request,
-    cursor: str | None = Query(None),
+    cursor: str | None = Query(None, max_length=512),
     limit: int = Query(50, ge=1, le=200),
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
@@ -175,6 +186,16 @@ async def list_canonical(
     return RunPage(
         data=[RunOut.model_validate(run) for run in runs],
         meta=RunPageMeta(next_cursor=next_cursor, has_more=has_more),
+        links=RunPageLinks(
+            self=_canonical_runs_url(workspace_id, company_id, cursor=cursor, limit=limit),
+            next=(
+                _canonical_runs_url(
+                    workspace_id, company_id, cursor=next_cursor, limit=limit
+                )
+                if next_cursor is not None
+                else None
+            ),
+        ),
     )
 
 
