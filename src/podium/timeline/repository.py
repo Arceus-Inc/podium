@@ -6,13 +6,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, delete, desc, func, or_, select, update
+from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.events.models import Event
 from podium.timeline.models import ProjectionCursor, TimelineItem
 from podium.timeline.service_types import TimelineItemDraft
+
+TIMELINE_PROJECTOR = "timeline-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,12 +206,13 @@ async def page_items(
         filters.append(TimelineItem.occurred_at >= occurred_after)
     if occurred_before is not None:
         filters.append(TimelineItem.occurred_at <= occurred_before)
+    projection_cursor = await get_cursor(
+        session, company_id=company_id, projector=TIMELINE_PROJECTOR
+    )
+    as_of_seq = projection_cursor.last_event_seq if projection_cursor is not None else 0
+    filters.append(TimelineItem.source_event_seq <= as_of_seq)
     if cursor is not None:
         filters.append(TimelineItem.source_event_seq < cursor.source_event_seq)
-    as_of_stmt = select(func.coalesce(func.max(TimelineItem.source_event_seq), 0)).where(
-        TimelineItem.company_id == company_id
-    )
-    as_of_seq = int((await session.execute(as_of_stmt)).scalar_one())
     stmt = (
         select(TimelineItem)
         .where(*filters)

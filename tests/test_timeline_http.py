@@ -16,7 +16,12 @@ from podium.companies import create_company
 from podium.db import tenant_session
 from podium.events.service import append_event
 from podium.main import create_app
-from podium.timeline import TimelineItemDraft, TimelineType, project_timeline_event
+from podium.timeline import (
+    TimelineExclusion,
+    TimelineItemDraft,
+    TimelineType,
+    project_timeline_event,
+)
 from podium.users import create_user
 from podium.workspaces import create_workspace
 
@@ -127,6 +132,37 @@ async def _project_items(
             )
 
 
+async def _project_exclusion(
+    app: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    source_event_seq: int,
+) -> None:
+    instant = datetime(2026, 8, 9, 11, 0, tzinfo=UTC)
+    async with tenant_session(app, workspace_id) as session:
+        await append_event(
+            session,
+            company_id=company_id,
+            workspace_id=workspace_id,
+            seq=source_event_seq,
+            run_id=None,
+            type="run.text",
+            employee_id=None,
+            payload={"seq": source_event_seq},
+            created_at=instant,
+        )
+        await project_timeline_event(
+            session,
+            company_id=company_id,
+            workspace_id=workspace_id,
+            projector="timeline-v1",
+            projector_version="1",
+            expected_prior_seq=source_event_seq - 1,
+            exclusion=TimelineExclusion(source_event_seq=source_event_seq),
+        )
+
+
 def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
@@ -179,6 +215,7 @@ async def test_timeline_filters_are_applied_and_invalid_inputs_are_problems(
     for suffix in (
         "?cursor=not-a-cursor",
         "?category=unknown",
+        "?unrecognized=true",
         "?occurred_after=2026-08-09T10:00:00%2B01:00",
         "?occurred_after=2026-08-10T10:00:00Z&occurred_before=2026-08-09T10:00:00Z",
     ):
@@ -212,3 +249,71 @@ async def test_timeline_detail_etag_and_ownership_opacity(
 
     hidden = await api.get(f"{base}/{item_id}", headers=_headers(peer_token))
     assert hidden.status_code == 404
+
+
+async def test_timeline_hides_all_decide_failures_as_not_found(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, _owner_token, _peer_token = await _seed_company(
+        sessionmaker, slug="opaque"
+    )
+    async with sessionmaker() as session, session.begin():
+        other_workspace = await create_workspace(session, name="other", slug="other")
+        _, foreign_token = await create_api_key(
+            session, workspace_id=other_workspace.id, name="foreign"
+        )
+        other_company = await create_company(
+            session,
+            workspace_id=workspace_id,
+            slug="opaque-other-company",
+            name="Other",
+        )
+        _, mismatched_token = await create_api_key(
+            session,
+            workspace_id=workspace_id,
+            company_id=other_company.id,
+            name="scoped",
+        )
+    endpoint = f"/v1/workspaces/{workspace_id}/companies/{company_id}/timeline"
+
+    for token in (foreign_token, mismatched_token):
+        response = await api.get(endpoint, headers=_headers(token))
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_timeline_as_of_seq_includes_exclusions_and_empty_projection(
+    api: httpx.AsyncClient,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, company_id, owner_token, _ = await _seed_company(sessionmaker, slug="excluded")
+    await _project_items(app_sessionmaker, workspace_id=workspace_id, company_id=company_id)
+    await _project_exclusion(
+        app_sessionmaker,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        source_event_seq=4,
+    )
+    base = f"/v1/workspaces/{workspace_id}/companies/{company_id}/timeline"
+    with_items = await api.get(base, headers=_headers(owner_token))
+    assert [item["source_event_seq"] for item in with_items.json()["data"]] == [3, 2, 1]
+    assert with_items.json()["meta"]["as_of_seq"] == 4
+
+    empty_workspace, empty_company, empty_token, _ = await _seed_company(
+        sessionmaker, slug="all-excluded"
+    )
+    await _project_exclusion(
+        app_sessionmaker,
+        workspace_id=empty_workspace,
+        company_id=empty_company,
+        source_event_seq=1,
+    )
+    empty = await api.get(
+        f"/v1/workspaces/{empty_workspace}/companies/{empty_company}/timeline",
+        headers=_headers(empty_token),
+    )
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["data"] == []
+    assert empty.json()["meta"] == {"has_more": False, "next_cursor": None, "as_of_seq": 1}

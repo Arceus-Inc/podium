@@ -32,6 +32,20 @@ _CATEGORIES = frozenset(
     {"direction", "work", "deliverable", "people", "learning", "cost", "system"}
 )
 _CURSOR_MAX_LENGTH = 512
+_TIMELINE_QUERY_PARAMETERS = frozenset(
+    {
+        "limit",
+        "cursor",
+        "category",
+        "attention",
+        "actor_type",
+        "actor_id",
+        "subject_type",
+        "subject_id",
+        "occurred_after",
+        "occurred_before",
+    }
+)
 
 
 async def _visible_company_or_404(
@@ -42,7 +56,7 @@ async def _visible_company_or_404(
 ) -> None:
     resource = Resource(kind="company", workspace_id=workspace_id, company_id=company_id)
     if not decide(actor, "read", resource):
-        raise HTTPException(status_code=403, detail="forbidden")
+        raise HTTPException(status_code=404, detail="company not found")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
         company = await get_company(session, company_id, user_id=actor.user_id)
     if company is None:
@@ -126,10 +140,20 @@ def _if_none_match_matches(value: str | None, etag: str) -> bool:
     )
 
 
+def _reject_unknown_query_parameters(request: Request) -> None:
+    unknown = set(request.query_params) - _TIMELINE_QUERY_PARAMETERS
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown query parameter: {sorted(unknown)[0]}",
+        )
+
+
 @router.get("/timeline", response_model=TimelinePageEnvelope)
 async def list_timeline(
     workspace_id: uuid.UUID,
     company_id: uuid.UUID,
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, max_length=_CURSOR_MAX_LENGTH),
     category: str | None = Query(default=None),
@@ -143,6 +167,7 @@ async def list_timeline(
     actor: Actor = Depends(enforce_rate_limit),
     sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
 ) -> TimelinePageEnvelope:
+    _reject_unknown_query_parameters(request)
     if category is not None and category not in _CATEGORIES:
         raise HTTPException(status_code=422, detail="category is invalid")
     after = _parse_utc(occurred_after, field="occurred_after") if occurred_after is not None else None
