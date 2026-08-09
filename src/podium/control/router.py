@@ -25,7 +25,7 @@ from podium.control._comments import (
 )
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
-from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
+from podium.control._governance import ApprovalView, PlanConflictError, PlanView, UnknownPlanError
 from podium.control._observe import (
     ArtifactSummary,
     CompanyStatus,
@@ -437,6 +437,26 @@ async def export_workforce(
 
 
 # -- the human boundary (CO2): CEO proposals decided by a person, never a model ---------------
+
+
+@router.get("/approvals", response_model=list[ApprovalView])
+async def approvals(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    status: Literal["pending"] = "pending",
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> list[ApprovalView]:
+    """Pending human gates, oldest first; no other approval status is readable yet."""
+    del status
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    return await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.governance.pending_approvals(),
+    )
 
 
 @router.get("/plans", response_model=list[PlanView])

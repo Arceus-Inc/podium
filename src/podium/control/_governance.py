@@ -6,8 +6,16 @@ management grants, budgets, and the audit trail land atomically or not at all.""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
+from chorus.ledger import (
+    Approval,
+    ApprovalAction,
+    ApprovalGate,
+    ApprovalStatus,
+    ApprovalSubjectKind,
+)
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
@@ -21,6 +29,62 @@ class UnknownPlanError(ValueError):
 
 class PlanConflictError(ValueError):
     """The plan is not in a decidable state (already applied/rejected/superseded)."""
+
+
+class TaskSubjectRef(BaseModel):
+    """The task an approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["task"] = "task"
+    id: str
+
+
+class ArtifactSubjectRef(BaseModel):
+    """The artifact an approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["artifact"] = "artifact"
+    id: str
+
+
+class EmployeeSubjectRef(BaseModel):
+    """The employee a hire approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["employee"] = "employee"
+    id: str
+
+
+class BudgetIncidentSubjectRef(BaseModel):
+    """The budget incident an override approval gates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["budget_incident"] = "budget_incident"
+    id: str
+
+
+ApprovalSubjectRef: TypeAlias = (
+    TaskSubjectRef | ArtifactSubjectRef | EmployeeSubjectRef | BudgetIncidentSubjectRef
+)
+
+
+class ApprovalView(BaseModel):
+    """One pending human gate, projected directly from Chorus's approval ledger."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    subject: ApprovalSubjectRef
+    reason: str
+    action: ApprovalAction
+    status: ApprovalStatus
+    gate_kind: ApprovalGate | None
+    expires_at: datetime | None
+    created_at: datetime | None
 
 
 class PlannedEmployeeView(BaseModel):
@@ -101,6 +165,31 @@ def _view(plan: WorkforcePlan) -> PlanView:
     )
 
 
+def _subject_view(approval: Approval) -> ApprovalSubjectRef:
+    match approval.subject_kind:
+        case ApprovalSubjectKind.TASK:
+            return TaskSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.ARTIFACT:
+            return ArtifactSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.EMPLOYEE:
+            return EmployeeSubjectRef(id=approval.subject_id)
+        case ApprovalSubjectKind.BUDGET_INCIDENT:
+            return BudgetIncidentSubjectRef(id=approval.subject_id)
+
+
+def _approval_view(approval: Approval) -> ApprovalView:
+    return ApprovalView(
+        id=approval.id,
+        subject=_subject_view(approval),
+        reason=approval.reason,
+        action=approval.action,
+        status=approval.status,
+        gate_kind=approval.gate_kind,
+        expires_at=approval.expires_at,
+        created_at=approval.created_at,
+    )
+
+
 class GovernanceFacade:
     """Pure delegation to the engine's plan service; translation, never business logic."""
 
@@ -122,6 +211,10 @@ class GovernanceFacade:
     def plans(self) -> list[PlanView]:
         """Every persisted plan revision, newest last — proposed ones are the pending inbox."""
         return [_view(plan) for plan in self._ledger.workforce_plans.list()]
+
+    def pending_approvals(self) -> list[ApprovalView]:
+        """Open approval gates, oldest first; Chorus excludes expired gates itself."""
+        return [_approval_view(approval) for approval in self._ledger.approvals.pending()]
 
     def approve(self, plan_id: str, *, by: str) -> PlanView:
         """Atomically materialize the latest valid proposal as an audited human decision."""
@@ -155,6 +248,7 @@ class GovernanceFacade:
 
 
 __all__ = [
+    "ApprovalView",
     "GovernanceFacade",
     "ManagementGrantView",
     "PlanConflictError",

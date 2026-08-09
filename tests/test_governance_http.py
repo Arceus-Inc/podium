@@ -17,6 +17,7 @@ from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
 from podium.main import create_app
+from podium.users import create_user
 from podium.workspaces import create_workspace
 
 
@@ -177,3 +178,119 @@ async def test_plans_require_auth(
     ws_id, company_id, _ = await _mint(sessionmaker, "gov3")
     response = await api.get(f"/v1/workspaces/{ws_id}/companies/{company_id}/plans")
     assert response.status_code == 401
+
+
+def _seed_approvals(dsn: str, company_id: str) -> tuple[str, str, str, str]:
+    from datetime import UTC, datetime, timedelta
+
+    from chorus.ids import mint_id
+    from chorus.ledger import Approval, ApprovalAction, ApprovalGate, ApprovalSubjectKind, Ledger
+
+    task_approval_id, artifact_approval_id, expired_approval_id = mint_id(), mint_id(), mint_id()
+    task_id, artifact_id, expired_task_id = mint_id(), mint_id(), mint_id()
+    ledger = Ledger.open(dsn, company_id=company_id)
+    try:
+        ledger.approvals.request(
+            Approval(
+                id=task_approval_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=task_id,
+                reason="accept the release",
+                action=ApprovalAction.TASK_GATE,
+                gate_kind=ApprovalGate.ACCEPTANCE,
+            )
+        )
+        ledger.approvals.request(
+            Approval(
+                id=artifact_approval_id,
+                subject_kind=ApprovalSubjectKind.ARTIFACT,
+                subject_id=artifact_id,
+                reason="promote the release",
+                action=ApprovalAction.BOARD_APPROVAL,
+            )
+        )
+        ledger.approvals.request(
+            Approval(
+                id=expired_approval_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=expired_task_id,
+                reason="stale gate",
+                expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+    finally:
+        ledger.close()
+    return task_approval_id, artifact_approval_id, task_id, artifact_id
+
+
+async def test_approvals_surface_pending_gates_and_reject_other_statuses(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    ws_id, company_id, token = await _mint(sessionmaker, "approvals")
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    task_approval_id, artifact_approval_id, task_id, artifact_id = _seed_approvals(dsn, company_id)
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/approvals"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = await api.get(f"{base}?status=pending", headers=headers)
+    assert response.status_code == 200
+    approvals = response.json()
+    assert [approval["id"] for approval in approvals] == [task_approval_id, artifact_approval_id]
+    assert approvals[0]["subject"] == {"kind": "task", "id": task_id}
+    assert approvals[0]["action"] == "task_gate"
+    assert approvals[0]["gate_kind"] == "acceptance"
+    assert approvals[1]["subject"] == {"kind": "artifact", "id": artifact_id}
+    assert approvals[1]["action"] == "board_approval"
+    assert all(approval["status"] == "pending" for approval in approvals)
+    assert all(approval["created_at"] is not None for approval in approvals)
+
+    assert (await api.get(f"{base}?status=approved", headers=headers)).status_code == 422
+    assert (await api.get(f"{base}?status=unknown", headers=headers)).status_code == 422
+
+
+async def test_approvals_keep_company_ownership_opaque(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="Ownership", slug="approval-ownership")
+        owner = await create_user(
+            session, workspace_id=workspace.id, email="owner@example.com", name="Owner"
+        )
+        peer = await create_user(
+            session, workspace_id=workspace.id, email="peer@example.com", name="Peer"
+        )
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            slug="private",
+            name="Private",
+            owner_user_id=owner.id,
+        )
+        _, owner_token = await create_api_key(
+            session, workspace_id=workspace.id, name="owner", user_id=owner.id
+        )
+        _, peer_token = await create_api_key(
+            session, workspace_id=workspace.id, name="peer", user_id=peer.id
+        )
+        foreign_workspace = await create_workspace(session, name="Foreign", slug="approval-foreign")
+        _, foreign_token = await create_api_key(
+            session, workspace_id=foreign_workspace.id, name="foreign"
+        )
+
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    _seed_approvals(dsn, str(company.id))
+    path = f"/v1/workspaces/{workspace.id}/companies/{company.id}/approvals"
+
+    assert (
+        await api.get(path, headers={"Authorization": f"Bearer {owner_token}"})
+    ).status_code == 200
+    assert (
+        await api.get(path, headers={"Authorization": f"Bearer {peer_token}"})
+    ).status_code == 404
+    assert (
+        await api.get(path, headers={"Authorization": f"Bearer {foreign_token}"})
+    ).status_code == 403

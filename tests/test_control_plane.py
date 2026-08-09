@@ -9,6 +9,7 @@ plane ever sees `Ledger` internals.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -87,6 +88,70 @@ def test_read_planes_are_company_isolated(
         assert plane_b.workforce.roster() == []
     finally:
         plane_b.close()
+
+
+def test_governance_pending_approvals_projects_subjects_and_excludes_expired(
+    database_url: str, provider: ControlPlaneProvider
+) -> None:
+    from chorus.ids import mint_id
+    from chorus.ledger import (
+        Approval,
+        ApprovalAction,
+        ApprovalGate,
+        ApprovalSubjectKind,
+        Ledger,
+    )
+
+    ws_id, company_id = uuid.uuid4(), uuid.uuid4()
+    dsn = _pg_conninfo(database_url, user="podium_app")
+    task_approval_id, artifact_approval_id, expired_approval_id = mint_id(), mint_id(), mint_id()
+    task_id, artifact_id, expired_task_id = mint_id(), mint_id(), mint_id()
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.approvals.request(
+            Approval(
+                id=task_approval_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=task_id,
+                reason="accept the release",
+                action=ApprovalAction.TASK_GATE,
+                gate_kind=ApprovalGate.ACCEPTANCE,
+            )
+        )
+        ledger.approvals.request(
+            Approval(
+                id=artifact_approval_id,
+                subject_kind=ApprovalSubjectKind.ARTIFACT,
+                subject_id=artifact_id,
+                reason="promote the release",
+                action=ApprovalAction.BOARD_APPROVAL,
+            )
+        )
+        ledger.approvals.request(
+            Approval(
+                id=expired_approval_id,
+                subject_kind=ApprovalSubjectKind.TASK,
+                subject_id=expired_task_id,
+                reason="stale gate",
+                expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
+    finally:
+        ledger.close()
+
+    plane = provider.read_plane(workspace_id=ws_id, company_id=company_id)
+    try:
+        approvals = plane.governance.pending_approvals()
+        assert [approval.id for approval in approvals] == [task_approval_id, artifact_approval_id]
+        assert approvals[0].subject.kind == "task"
+        assert approvals[0].subject.id == task_id
+        assert approvals[0].gate_kind == "acceptance"
+        assert approvals[1].subject.kind == "artifact"
+        assert approvals[1].subject.id == artifact_id
+        assert approvals[1].action == "board_approval"
+        assert all(approval.status == "pending" for approval in approvals)
+    finally:
+        plane.close()
 
 
 def _seed_work(dsn: str, company_id: uuid.UUID) -> None:
