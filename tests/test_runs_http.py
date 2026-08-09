@@ -129,6 +129,43 @@ async def test_create_run_with_delegation_params(
     assert body["params"]["max_team_size"] == 3
 
 
+async def test_create_run_omits_unset_params_and_returns_empty_counts(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"directive": "ship it", "idempotency_key": "optional", "assignee": "ada"},
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["counts"] == {}
+    assert response.json()["params"] == {"execution_mode": "delivery", "assignee": "ada"}
+
+
+async def test_run_create_rejects_engine_private_fields(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    token, a_company, _b = await _setup(sessionmaker)
+    response = await api.post(
+        f"/v1/companies/{a_company}/runs",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"directive": "ship it", "idempotency_key": "private", "engine_private": "secret"},
+    )
+    assert response.status_code == 422
+
+
+async def test_run_openapi_uses_named_typed_nested_schemas(api: httpx.AsyncClient) -> None:
+    document = (await api.get("/openapi.json")).json()
+    schemas = document["components"]["schemas"]
+    run = schemas["RunOut"]
+
+    assert run["properties"]["counts"] == {"$ref": "#/components/schemas/RunCounts"}
+    assert run["properties"]["params"] == {"$ref": "#/components/schemas/RunParams"}
+    assert schemas["RunCounts"]["additionalProperties"] is False
+    assert schemas["RunParams"]["additionalProperties"] is False
+
+
 async def test_create_run_delegation_requires_lead_and_goal(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:

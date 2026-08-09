@@ -35,7 +35,12 @@ def _get_log_store(request: Request) -> RunLogStore:
     return store
 
 
-@router.post("/companies/{company_id}/runs", status_code=202, response_model=RunOut)
+@router.post(
+    "/companies/{company_id}/runs",
+    status_code=202,
+    response_model=RunOut,
+    response_model_exclude_unset=True,
+)
 async def create(
     company_id: uuid.UUID,
     body: RunCreate,
@@ -52,12 +57,16 @@ async def create(
             company_id=company_id,
             directive=body.directive,
             idempotency_key=body.idempotency_key,
-            params=body.params(),
+            params=body.params().model_dump(exclude_none=True),
         )
         return RunOut.model_validate(run)
 
 
-@router.get("/companies/{company_id}/runs/{run_id}", response_model=RunOut)
+@router.get(
+    "/companies/{company_id}/runs/{run_id}",
+    response_model=RunOut,
+    response_model_exclude_unset=True,
+)
 async def get(
     company_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -72,7 +81,11 @@ async def get(
     return RunOut.model_validate(run)
 
 
-@router.post("/runs/{run_id}/cancel", response_model=RunOut)
+@router.post(
+    "/runs/{run_id}/cancel",
+    response_model=RunOut,
+    response_model_exclude_unset=True,
+)
 async def cancel(
     run_id: uuid.UUID,
     actor: Actor = Depends(enforce_rate_limit),
