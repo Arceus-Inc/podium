@@ -18,8 +18,10 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
+from podium.control._governance import ReflectionProposalReviewView
 from podium.control._observe import ReflectionProposalView
 from podium.main import create_app
+from podium.users import create_user
 from podium.workspaces import create_workspace
 from reflection_proposal_support import create_reflection_proposal
 
@@ -301,6 +303,106 @@ async def test_reflection_proposal_detail_door_shows_diff_without_tenant_leaks(
         f"/v1/workspaces/{workspace_id}/companies/{other_company.id}/reflection-proposals/"
         f"{proposal.artifact_revision_id}",
         headers=headers,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "reflection proposal not found"
+
+
+async def test_reflection_proposal_review_door_records_one_authenticated_human_verdict(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, service_token = await _seed_company(sessionmaker, slug="review")
+    async with sessionmaker() as session, session.begin():
+        reviewer = await create_user(
+            session,
+            workspace_id=workspace_id,
+            email="reviewer@example.com",
+            name="Reviewer",
+        )
+        _, token = await create_api_key(
+            session,
+            workspace_id=workspace_id,
+            user_id=reviewer.id,
+            name="reviewer-key",
+        )
+    proposal = create_reflection_proposal(database_url, company_id, suffix="review-http")
+    headers = httpx.Headers(
+        (
+            ("Authorization", f"Bearer {token}"),
+            ("Content-Type", "application/json"),
+        )
+    )
+    url = (
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}/reviews"
+    )
+    body = '{"verdict":"accepted","reason":"The visible diff is supported."}'
+
+    service_denied = await api.post(
+        url,
+        headers=httpx.Headers(
+            (
+                ("Authorization", f"Bearer {service_token}"),
+                ("Content-Type", "application/json"),
+            )
+        ),
+        content=body,
+    )
+    assert service_denied.status_code == 403
+    assert service_denied.json()["error"]["message"] == "human reviewer required"
+
+    response = await api.post(url, headers=headers, content=body)
+
+    assert response.status_code == 201
+    review = ReflectionProposalReviewView.model_validate(response.json())
+    assert review.proposal_artifact_revision_id == proposal.artifact_revision_id
+    assert review.verdict == "accepted"
+    assert review.reviewer_user_id == str(reviewer.id)
+    assert review.reason == "The visible diff is supported."
+
+    duplicate = await api.post(url, headers=headers, content=body)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["message"] == "reflection proposal already reviewed"
+
+    spoofed = await api.post(
+        url,
+        headers=headers,
+        content=(
+            '{"verdict":"rejected","reason":"No",'
+            '"reviewer_user_id":"client-controlled"}'
+        ),
+    )
+    assert spoofed.status_code == 422
+
+    blank_reason = await api.post(
+        url,
+        headers=headers,
+        content='{"verdict":"rejected","reason":" "}',
+    )
+    assert blank_reason.status_code == 422
+
+    invalid = await api.post(
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        "not-a-uuid/reviews",
+        headers=headers,
+        content=body,
+    )
+    assert invalid.status_code == 404
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session,
+            workspace_id=workspace_id,
+            slug="review-other",
+            name="Review other",
+        )
+    isolated = await api.post(
+        f"/v1/workspaces/{workspace_id}/companies/{other_company.id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}/reviews",
+        headers=headers,
+        content=body,
     )
     assert isolated.status_code == 404
     assert isolated.json()["error"]["message"] == "reflection proposal not found"

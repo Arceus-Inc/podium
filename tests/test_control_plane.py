@@ -13,6 +13,7 @@ import uuid
 import pytest
 
 from podium.control import CompanyControlPlane, ControlPlaneProvider
+from podium.control._governance import ReflectionProposalAlreadyReviewedError
 from podium.control._observe import UnknownReflectionProposalError
 from reflection_proposal_support import create_reflection_proposal
 
@@ -282,6 +283,39 @@ def test_observe_facade_reads_visible_reflection_proposal_diff(
             isolated.observe.reflection_proposal(proposal.artifact_revision_id)
     finally:
         isolated.close()
+
+
+@pytest.mark.parametrize("verdict", ("accepted", "rejected"))
+def test_governance_facade_records_authenticated_reflection_review(
+    database_url: str,
+    provider: ControlPlaneProvider,
+    verdict: str,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix=verdict)
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        review = plane.governance.review_reflection_proposal(
+            proposal.artifact_revision_id,
+            verdict=verdict,
+            by="founder",
+            reason="The visible diff was reviewed against its cited trajectories.",
+        )
+
+        assert review.proposal_artifact_revision_id == proposal.artifact_revision_id
+        assert review.verdict == verdict
+        assert review.reviewer_user_id == "founder"
+        assert review.created_at is not None
+
+        with pytest.raises(ReflectionProposalAlreadyReviewedError):
+            plane.governance.review_reflection_proposal(
+                proposal.artifact_revision_id,
+                verdict=verdict,
+                by="founder",
+                reason="A second final verdict must fail.",
+            )
+    finally:
+        plane.close()
 
 
 def test_direction_facade_reads_the_goal_tree(
