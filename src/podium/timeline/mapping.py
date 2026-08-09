@@ -11,7 +11,7 @@ from typing import TypeAlias
 from chorus.events import Event as ChorusEvent
 from chorus.events import EventKind
 from chorus.ledger import ExecutionMode, TaskPriority
-from dream.contracts.strategy import LandedPhase, RecoveryHint
+from dream.contracts.strategy import LandedOutcome, LandedPhase, RecoveryHint
 
 from podium.timeline.models import TimelineType
 from podium.timeline.service_types import TimelineExclusion, TimelineItemDraft
@@ -56,7 +56,10 @@ class RunStalledPayload:
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> RunStalledPayload:
         _require_keys(payload, required=frozenset({"reason"}))
-        return cls(reason=_string(payload, "reason"))
+        reason = _string(payload, "reason")
+        if reason != "lease_expired":
+            raise TimelinePayloadError("unknown run-stalled reason")
+        return cls(reason=reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +69,10 @@ class BudgetHardStopPayload:
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> BudgetHardStopPayload:
         _require_keys(payload, required=frozenset({"gate"}))
-        return cls(gate=_string(payload, "gate"))
+        gate = _string(payload, "gate")
+        if gate != "dispatch":
+            raise TimelinePayloadError("unknown budget-hard-stop gate")
+        return cls(gate=gate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +84,7 @@ class OutcomeLandedPayload:
     dod_status: str | None
     disposition: str | None
     diagnostic: str | None
-    execution_mode: str | None
+    execution_mode: ExecutionMode | None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> OutcomeLandedPayload:
@@ -93,15 +99,28 @@ class OutcomeLandedPayload:
             recovery_hint = RecoveryHint(_string(payload, "recovery_hint"))
         except ValueError as exc:
             raise TimelinePayloadError("unknown landed outcome value") from exc
+        execution_mode = _optional_execution_mode(payload, "execution_mode")
+        summary = _string(payload, "summary")
+        passed = _optional_bool(payload, "passed")
+        landed = LandedOutcome(
+            phase=phase,
+            summary=summary,
+            dod_status=_optional_string(payload, "dod_status"),
+            disposition=_optional_string(payload, "disposition"),
+            diagnostic=_optional_string(payload, "diagnostic") or "",
+            execution_mode=execution_mode,
+        )
+        if passed is not landed.strategy_passed() or recovery_hint is not landed.recovery_hint():
+            raise TimelinePayloadError("landed outcome fields contradict its phase")
         return cls(
             phase=phase,
-            summary=_string(payload, "summary"),
-            passed=_optional_bool(payload, "passed"),
+            summary=summary,
+            passed=passed,
             recovery_hint=recovery_hint,
             dod_status=_optional_string(payload, "dod_status"),
             disposition=_optional_string(payload, "disposition"),
             diagnostic=_optional_string(payload, "diagnostic"),
-            execution_mode=_optional_string(payload, "execution_mode"),
+            execution_mode=execution_mode,
         )
 
 
@@ -124,16 +143,6 @@ def _task_created(event: ChorusEvent, source_event_seq: int) -> TimelineItemDraf
         source_event_seq=source_event_seq,
         event_type=TimelineType.WORK_TASK_CREATED,
         title="Task created",
-    )
-
-
-def _task_assigned(event: ChorusEvent, source_event_seq: int) -> TimelineItemDraft:
-    _require_keys(event.payload, required=frozenset())
-    return _task_item(
-        event,
-        source_event_seq=source_event_seq,
-        event_type=TimelineType.WORK_TASK_DELEGATED,
-        title="Task delegated",
     )
 
 
@@ -258,10 +267,20 @@ def _optional_bool(payload: Mapping[str, object], key: str) -> bool | None:
     return value
 
 
+def _optional_execution_mode(payload: Mapping[str, object], key: str) -> ExecutionMode | None:
+    value = _optional_string(payload, key)
+    if value is None:
+        return None
+    try:
+        return ExecutionMode(value)
+    except ValueError as exc:
+        raise TimelinePayloadError("unknown landed outcome execution_mode") from exc
+
+
 TIMELINE_RULES: Mapping[EventKind, TimelineRule] = MappingProxyType(
     {
         EventKind.TASK_CREATED: _task_created,
-        EventKind.TASK_ASSIGNED: _task_assigned,
+        EventKind.TASK_ASSIGNED: ExclusionRule("ordinary assignment is not delegation"),
         EventKind.TASK_STATUS: ExclusionRule("status changes need a stable product transition"),
         EventKind.TASK_DEPENDENCY_RESOLVED: ExclusionRule("dependency state is reconciled"),
         EventKind.TASK_CHILDREN_DONE: ExclusionRule("parent integration state is reconciled"),

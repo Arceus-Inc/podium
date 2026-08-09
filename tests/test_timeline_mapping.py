@@ -107,24 +107,52 @@ def test_explicitly_excluded_event_returns_an_exclusion() -> None:
     assert mapped == TimelineExclusion(source_event_seq=8)
 
 
+def test_initial_task_assignment_is_not_a_delegation() -> None:
+    mapped = map_timeline_event(
+        _event(EventKind.TASK_ASSIGNED, payload={}), source_event_seq=9
+    )
+
+    assert mapped == TimelineExclusion(source_event_seq=9)
+
+
 @pytest.mark.parametrize(
-    ("phase", "recovery_hint", "event_type", "attention"),
+    ("phase", "recovery_hint", "passed", "event_type", "attention"),
     [
-        (LandedPhase.TERMINAL_PASS, RecoveryHint.NONE, TimelineType.WORK_TASK_VERIFIED, False),
-        (LandedPhase.TERMINAL_FAIL, RecoveryHint.NONE, TimelineType.WORK_TASK_REJECTED, True),
-        (LandedPhase.NEEDS_REWORK, RecoveryHint.REWORK, TimelineType.WORK_TASK_BLOCKED, True),
+        (
+            LandedPhase.TERMINAL_PASS,
+            RecoveryHint.NONE,
+            True,
+            TimelineType.WORK_TASK_VERIFIED,
+            False,
+        ),
+        (
+            LandedPhase.TERMINAL_FAIL,
+            RecoveryHint.NONE,
+            False,
+            TimelineType.WORK_TASK_REJECTED,
+            True,
+        ),
+        (
+            LandedPhase.NEEDS_REWORK,
+            RecoveryHint.REWORK,
+            False,
+            TimelineType.WORK_TASK_BLOCKED,
+            True,
+        ),
         (
             LandedPhase.DELEGATED,
             RecoveryHint.WAIT_FOR_CHILDREN,
+            None,
             TimelineType.WORK_TASK_DELEGATED,
             False,
         ),
-        (LandedPhase.STRANDED, RecoveryHint.ESCALATE, TimelineType.SYSTEM_STALLED, True),
+        (LandedPhase.STRANDED, RecoveryHint.ESCALATE, None, TimelineType.SYSTEM_STALLED, True),
     ],
 )
 def test_landed_outcome_maps_its_typed_phase_mechanically(
     phase: LandedPhase,
     recovery_hint: RecoveryHint,
+    passed: bool | None,
     event_type: TimelineType,
     attention: bool,
 ) -> None:
@@ -134,7 +162,7 @@ def test_landed_outcome_maps_its_typed_phase_mechanically(
             payload={
                 "phase": phase.value,
                 "summary": "Typed outcome summary",
-                "passed": phase is LandedPhase.TERMINAL_PASS,
+                "passed": passed,
                 "recovery_hint": recovery_hint.value,
             },
         ),
@@ -164,6 +192,37 @@ def test_cancelled_landed_outcome_is_explicitly_excluded() -> None:
     assert mapped == TimelineExclusion(source_event_seq=10)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "phase": LandedPhase.TERMINAL_PASS.value,
+            "summary": "DoD passed",
+            "passed": False,
+            "recovery_hint": RecoveryHint.NONE.value,
+        },
+        {
+            "phase": LandedPhase.TERMINAL_PASS.value,
+            "summary": "DoD passed",
+            "passed": True,
+            "recovery_hint": RecoveryHint.REWORK.value,
+        },
+        {
+            "phase": LandedPhase.DELEGATED.value,
+            "summary": "Delegated to subtree",
+            "passed": None,
+            "recovery_hint": RecoveryHint.WAIT_FOR_CHILDREN.value,
+            "execution_mode": "unknown",
+        },
+    ],
+)
+def test_landed_outcome_rejects_contradictory_or_unknown_typed_fields(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(TimelinePayloadError):
+        map_timeline_event(_event(EventKind.OUTCOME_LANDED, payload=payload), source_event_seq=11)
+
+
 def test_budget_hard_stop_requires_its_typed_gate() -> None:
     mapped = map_timeline_event(
         _event(EventKind.BUDGET_HARD_STOP, payload={"gate": "dispatch"}), source_event_seq=11
@@ -172,3 +231,17 @@ def test_budget_hard_stop_requires_its_typed_gate() -> None:
     assert isinstance(mapped, TimelineItemDraft)
     assert mapped.event_type is TimelineType.COST_HARD_STOP
     assert mapped.attention is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "payload"),
+    [
+        (EventKind.RUN_STALLED, {"reason": "unknown"}),
+        (EventKind.BUDGET_HARD_STOP, {"gate": "unknown"}),
+    ],
+)
+def test_closed_scheduler_payload_values_are_validated(
+    kind: EventKind, payload: dict[str, object]
+) -> None:
+    with pytest.raises(TimelinePayloadError):
+        map_timeline_event(_event(kind, payload=payload), source_event_seq=12)
