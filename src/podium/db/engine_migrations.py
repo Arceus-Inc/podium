@@ -128,8 +128,6 @@ def _sync_stream(connection: Connection, stream: EngineMigrationStream) -> None:
                 "VALUES (:identifier, :checksum, now())"
             ).bindparams(identifier=migration.id, checksum=migration.checksum)
         )
-        for table_name in migration.table_names():
-            _grant_runtime_table_access(connection, table_name)
     for migration in stream.migrations:
         for table_name in migration.table_names():
             _grant_runtime_table_access(connection, table_name)
