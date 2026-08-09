@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from http import HTTPStatus
-from uuid import UUID, uuid4
+from typing import Annotated, cast
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 REQUEST_ID_HEADER = "X-Request-ID"
-_REQUEST_ID: ContextVar[UUID] = ContextVar("request_id")
+RequestId = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$"),
+]
+_REQUEST_ID: ContextVar[str] = ContextVar("request_id")
+_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{1,128}$")
 _STATUS_CODES: dict[int, str] = {
     400: "bad_request",
     401: "unauthorized",
@@ -30,6 +36,7 @@ _STATUS_CODES: dict[int, str] = {
     503: "unavailable",
 }
 _ERROR_STATUSES = tuple(_STATUS_CODES)
+_OPENAPI_ERROR_STATUSES = frozenset(str(status) for status in _ERROR_STATUSES)
 
 
 class ValidationErrorItem(BaseModel):
@@ -52,23 +59,20 @@ class ProblemDetails(BaseModel):
     status: int
     detail: str
     instance: str
-    trace_id: UUID
+    trace_id: RequestId
     errors: tuple[ValidationErrorItem, ...] | None = None
 
 
-def get_request_id() -> UUID:
+def get_request_id() -> str:
     """Return the request ID for the current HTTP handler or exception handler."""
     return _REQUEST_ID.get()
 
 
-def _incoming_or_generated_request_id(request: Request) -> UUID:
+def _incoming_or_generated_request_id(request: Request) -> str:
     incoming = request.headers.get(REQUEST_ID_HEADER)
-    if incoming is not None:
-        try:
-            return UUID(incoming)
-        except ValueError:
-            pass
-    return uuid4()
+    if incoming is not None and _REQUEST_ID_PATTERN.fullmatch(incoming):
+        return incoming
+    return str(uuid4())
 
 
 async def _with_request_id(
@@ -80,7 +84,7 @@ async def _with_request_id(
         response = await call_next(request)
     finally:
         _REQUEST_ID.reset(token)
-    response.headers[REQUEST_ID_HEADER] = str(request_id)
+    response.headers[REQUEST_ID_HEADER] = request_id
     return response
 
 
@@ -151,37 +155,34 @@ async def _on_integrity_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-def problem_responses() -> dict[int, dict[str, object]]:
+def problem_responses() -> dict[int | str, dict[str, object]]:
     """Use FastAPI's application-wide response declaration for every HTTP operation."""
     return {status: {"model": ProblemDetails} for status in _ERROR_STATUSES}
 
 
-def install_problem_openapi(app: FastAPI) -> None:
-    """Keep FastAPI's generated model reference while advertising the problem media type."""
-
-    def openapi() -> dict[str, object]:
-        if app.openapi_schema is None:
-            schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
-            paths = schema["paths"]
-            for path in paths.values():
-                for operation in path.values():
-                    responses = operation.get("responses")
-                    if responses is None:
-                        continue
-                    for response in responses.values():
-                        content = response.get("content")
-                        if content is None:
-                            continue
-                        problem_content = content.pop("application/json", None)
-                        if problem_content is not None:
-                            content[PROBLEM_MEDIA_TYPE] = problem_content
-            app.openapi_schema = schema
-        return app.openapi_schema
-
-    app.openapi = openapi  # type: ignore[method-assign]  # FastAPI exposes this as a method.
+def cache_problem_openapi(app: FastAPI) -> None:
+    """Cache the generated schema after replacing only declared error media types."""
+    schema = app.openapi()
+    paths = schema["paths"]
+    for path in paths.values():
+        for operation in path.values():
+            responses = operation.get("responses")
+            if responses is None:
+                continue
+            for status, response in responses.items():
+                if status not in _OPENAPI_ERROR_STATUSES:
+                    continue
+                content = response.get("content")
+                if content is None:
+                    continue
+                problem_content = content.pop("application/json", None)
+                if problem_content is not None:
+                    content[PROBLEM_MEDIA_TYPE] = problem_content
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    responses = cast(dict[int | str, dict[str, object]], app.router.responses)
+    responses.update(problem_responses())
     app.middleware("http")(_with_request_id)
     app.add_exception_handler(StarletteHTTPException, _on_http_exception)
     app.add_exception_handler(RequestValidationError, _on_validation_error)

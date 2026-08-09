@@ -128,11 +128,11 @@ async def test_rate_limited_response_sets_retry_after(
     assert limited.headers["Retry-After"] == "60"
 
 
-async def test_problem_echoes_valid_request_id(
+async def test_problem_echoes_valid_opaque_request_id(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     ws_id, token = await _ws_key(sessionmaker)
-    request_id = str(uuid4())
+    request_id = "req_company-create_42"
     resp = await api.get(
         f"/v1/workspaces/{ws_id}/companies/{uuid4()}",
         headers={"Authorization": f"Bearer {token}", REQUEST_ID_HEADER: request_id},
@@ -147,21 +147,26 @@ async def test_problem_generates_request_id_for_invalid_header(
     ws_id, token = await _ws_key(sessionmaker)
     resp = await api.get(
         f"/v1/workspaces/{ws_id}/companies/{uuid4()}",
-        headers={"Authorization": f"Bearer {token}", REQUEST_ID_HEADER: "not-a-uuid"},
+        headers={"Authorization": f"Bearer {token}", REQUEST_ID_HEADER: "not a request id"},
     )
     request_id = resp.headers[REQUEST_ID_HEADER]
     assert request_id == resp.json()["trace_id"]
-    assert request_id != "not-a-uuid"
+    assert request_id != "not a request id"
     assert str(UUID(request_id)) == request_id
 
 
 async def test_openapi_exposes_problem_details_for_error_responses(api: httpx.AsyncClient) -> None:
     schema = (await api.get("/openapi.json")).json()
     problem_schema = schema["components"]["schemas"]["ProblemDetails"]
-    assert problem_schema["properties"]["trace_id"]["format"] == "uuid"
+    assert problem_schema["properties"]["trace_id"]["maxLength"] == 128
     response = schema["paths"]["/v1/workspaces/{workspace_id}/companies"]["post"]["responses"][
         "409"
     ]
     assert response["content"][PROBLEM_MEDIA_TYPE]["schema"] == {
         "$ref": "#/components/schemas/ProblemDetails"
     }
+    created = schema["paths"]["/v1/workspaces/{workspace_id}/companies"]["post"]["responses"][
+        "201"
+    ]
+    assert "application/json" in created["content"]
+    assert PROBLEM_MEDIA_TYPE not in created["content"]
