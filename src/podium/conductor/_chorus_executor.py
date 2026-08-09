@@ -382,19 +382,32 @@ class ChorusRunExecutor:
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
         budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
+
+        def terminal_result() -> ExecutionResult | None:
+            current = runtime.graph.org._ledger.tasks.get(task_id)
+            if current is None or current.status not in _TERMINAL:
+                return None
+            mapped = _TERMINAL[current.status]
+            error = "task rejected" if mapped is RunStatus.FAILED else None
+            return ExecutionResult(status=mapped, error=error)
+
+        def cancel_or_terminal(fallback: ExecutionResult) -> ExecutionResult:
+            if runtime.graph.org.cancel_task(task_id):
+                return fallback
+            return terminal_result() or fallback
+
         try:
             for _ in budget:
+                if (terminal := terminal_result()) is not None:
+                    return terminal
                 if await is_canceled():
-                    return ExecutionResult(status=RunStatus.CANCELED)
-                current = runtime.graph.org._ledger.tasks.get(task_id)
-                if current is not None and current.status in _TERMINAL:
-                    mapped = _TERMINAL[current.status]
-                    error = "task rejected" if mapped is RunStatus.FAILED else None
-                    return ExecutionResult(status=mapped, error=error)
+                    return cancel_or_terminal(ExecutionResult(status=RunStatus.CANCELED))
                 await asyncio.sleep(1.0)
-            # ponytail: on timeout the chorus task is left in-progress (an orphan); chorus has no
-            # per-task cancel today (only whole-heartbeat stop, which would kill sibling runs).
-            return ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
+            if (terminal := terminal_result()) is not None:
+                return terminal
+            return cancel_or_terminal(
+                ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
+            )
         finally:
             # A delivery outcome landed — let horizon reflect on it and (human-gated) propose what's
             # next. Formation runs serve no delivery goal, so they don't feed the direction funnel.
