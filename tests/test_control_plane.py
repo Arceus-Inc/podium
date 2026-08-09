@@ -13,6 +13,8 @@ import uuid
 import pytest
 
 from podium.control import CompanyControlPlane, ControlPlaneProvider
+from podium.control._observe import UnknownReflectionProposalError
+from reflection_proposal_support import create_reflection_proposal
 
 pytestmark = pytest.mark.anyio
 
@@ -246,6 +248,40 @@ def test_observe_facade_reads_one_skill_revision_history(
             plane.observe.skill_revisions("ada", "unknown")
     finally:
         plane.close()
+
+
+def test_observe_facade_reads_visible_reflection_proposal_diff(
+    database_url: str,
+    provider: ControlPlaneProvider,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix="plane")
+
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        view = plane.observe.reflection_proposal(proposal.artifact_revision_id)
+        assert view.artifact_revision_id == proposal.artifact_revision_id
+        assert view.target.owner_employee_id == proposal.target.owner_employee_id
+        assert view.target.target_revision == "skill@4"
+        assert view.diff == proposal.diff
+        assert view.trajectory_refs[0].run_id == proposal.trajectory_refs[0].run_id
+        assert view.evidence_artifact_revision_ids == proposal.evidence_artifact_revision_ids
+        assert view.source_run_id == proposal.source_run_id
+        assert view.created_at is not None
+
+        with pytest.raises(UnknownReflectionProposalError):
+            plane.observe.reflection_proposal("not-a-uuid")
+        with pytest.raises(UnknownReflectionProposalError):
+            plane.observe.reflection_proposal(str(uuid.uuid4()))
+    finally:
+        plane.close()
+
+    isolated = provider.read_plane(workspace_id=workspace_id, company_id=uuid.uuid4())
+    try:
+        with pytest.raises(UnknownReflectionProposalError):
+            isolated.observe.reflection_proposal(proposal.artifact_revision_id)
+    finally:
+        isolated.close()
 
 
 def test_direction_facade_reads_the_goal_tree(

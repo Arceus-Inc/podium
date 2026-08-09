@@ -7,6 +7,7 @@ and a foreign workspace's token sees 404, never data.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -17,8 +18,10 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
+from podium.control._observe import ReflectionProposalView
 from podium.main import create_app
 from podium.workspaces import create_workspace
+from reflection_proposal_support import create_reflection_proposal
 
 
 @pytest_asyncio.fixture
@@ -260,6 +263,47 @@ async def test_skill_revision_history_door_is_ordered_and_does_not_leak(
     )
     assert isolated.status_code == 404
     assert isolated.json()["error"]["message"] == "skill not found"
+
+
+async def test_reflection_proposal_detail_door_shows_diff_without_tenant_leaks(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, token = await _seed_company(sessionmaker, slug="proposal")
+    proposal = create_reflection_proposal(database_url, company_id, suffix="http")
+    headers = httpx.Headers((("Authorization", f"Bearer {token}"),))
+    base = f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals"
+
+    response = await api.get(f"{base}/{proposal.artifact_revision_id}", headers=headers)
+
+    assert response.status_code == 200
+    view = ReflectionProposalView.model_validate(response.json())
+    assert view.artifact_revision_id == proposal.artifact_revision_id
+    assert view.target.target_id == proposal.target.target_id
+    assert view.diff == proposal.diff
+    assert view.trajectory_refs[1].task_id == proposal.trajectory_refs[1].task_id
+    assert view.evidence_artifact_revision_ids == proposal.evidence_artifact_revision_ids
+
+    for missing_id in ("not-a-uuid", str(uuid.uuid4())):
+        missing = await api.get(f"{base}/{missing_id}", headers=headers)
+        assert missing.status_code == 404
+        assert missing.json()["error"]["message"] == "reflection proposal not found"
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session,
+            workspace_id=workspace_id,
+            slug="proposal-other",
+            name="Proposal other",
+        )
+    isolated = await api.get(
+        f"/v1/workspaces/{workspace_id}/companies/{other_company.id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}",
+        headers=headers,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "reflection proposal not found"
 
 
 async def test_patch_goal_archives_it(

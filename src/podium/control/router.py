@@ -30,9 +30,11 @@ from podium.control._observe import (
     ArtifactSummary,
     CompanyStatus,
     OrgReport,
+    ReflectionProposalView,
     SkillRevisionView,
     SkillSummary,
     SpendRow,
+    UnknownReflectionProposalError,
     UnknownSkillError,
     UnknownTaskError,
     WhyLink,
@@ -227,6 +229,30 @@ async def skill_revision_history(
         )
     except UnknownSkillError as exc:
         raise HTTPException(status_code=404, detail="skill not found") from exc
+
+
+@router.get(
+    "/reflection-proposals/{artifact_revision_id}",
+    response_model=ReflectionProposalView,
+)
+async def reflection_proposal_detail(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    artifact_revision_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> ReflectionProposalView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.reflection_proposal(artifact_revision_id),
+        )
+    except UnknownReflectionProposalError as exc:
+        raise HTTPException(status_code=404, detail="reflection proposal not found") from exc
 
 
 class GoalPatch(BaseModel):
