@@ -15,7 +15,8 @@ from podium.conductor import EventMirror
 from podium.db import tenant_session
 from podium.logs import RunLogStore
 from podium.main import create_app
-from podium.runs import create_run
+from podium.runs import create_run, set_log_ref
+from podium.users import create_user
 from podium.workspaces import create_workspace
 
 
@@ -103,3 +104,29 @@ async def test_logs_cross_tenant_404(
         f"/v1/runs/{run_id}/logs", headers={"Authorization": f"Bearer {other_token}"}
     )
     assert resp.status_code == 404
+
+
+async def test_logs_are_hidden_from_workspace_peer(
+    api: tuple[httpx.AsyncClient, RunLogStore], sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    client, store = api
+    async with sessionmaker() as s, s.begin():
+        workspace = await create_workspace(s, name="A", slug="a")
+        owner = await create_user(s, workspace_id=workspace.id, email="owner@a.io", name="Owner")
+        peer = await create_user(s, workspace_id=workspace.id, email="peer@a.io", name="Peer")
+        company = await create_company(
+            s, workspace_id=workspace.id, owner_user_id=owner.id, slug="c", name="C"
+        )
+        _, peer_token = await create_api_key(
+            s, workspace_id=workspace.id, name="peer", user_id=peer.id
+        )
+    async with tenant_session(sessionmaker, workspace.id) as s:
+        run, _ = await create_run(
+            s, workspace_id=workspace.id, company_id=company.id, directive="d", idempotency_key="k"
+        )
+        await set_log_ref(s, run.id, store.ref(run.id))
+    store.append(run.id, "private transcript")
+    response = await client.get(
+        f"/v1/runs/{run.id}/logs", headers={"Authorization": f"Bearer {peer_token}"}
+    )
+    assert response.status_code == 404

@@ -38,7 +38,7 @@ async def list_events(
     if not decide(actor, "read", Resource(kind="run", workspace_id=actor.workspace_id)):
         raise HTTPException(status_code=403, detail="forbidden")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_run(session, run_id) is None:  # RLS hides another tenant's run → 404
+        if await get_run(session, run_id, user_id=actor.user_id) is None:
             raise HTTPException(status_code=404, detail="run not found")
         # Fetch one extra to know if a next page exists without a false positive on a full-but-final page.
         rows = await list_run_events(session, run_id, after=after, limit=limit + 1)

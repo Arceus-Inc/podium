@@ -14,6 +14,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from podium.companies import get_company
 from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
 
 _CONDUCTOR_CHANNEL = "podium_conductor"
@@ -87,8 +88,14 @@ async def create_run(
     return run, True
 
 
-async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
-    return await session.get(Run, run_id)
+async def get_run(
+    session: AsyncSession, run_id: uuid.UUID, *, user_id: uuid.UUID | None = None
+) -> Run | None:
+    """Fetch a run within the tenant session, optionally enforcing company visibility."""
+    run = await session.get(Run, run_id)
+    if run is None or await get_company(session, run.company_id, user_id=user_id) is None:
+        return None
+    return run
 
 
 async def list_runs(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Run]:

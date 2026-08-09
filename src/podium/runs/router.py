@@ -66,7 +66,7 @@ async def get(
 ) -> RunOut:
     _authorize(actor, "read", company_id)
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        run = await get_run(session, run_id)
+        run = await get_run(session, run_id, user_id=actor.user_id)
     if run is None or run.company_id != company_id:
         raise HTTPException(status_code=404, detail="run not found")
     return RunOut.model_validate(run)
@@ -80,10 +80,10 @@ async def cancel(
 ) -> RunOut:
     _authorize(actor, "cancel")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        if await get_run(session, run_id) is None:
+        if await get_run(session, run_id, user_id=actor.user_id) is None:
             raise HTTPException(status_code=404, detail="run not found")
         await request_cancel(session, run_id)
-        run = await get_run(session, run_id)
+        run = await get_run(session, run_id, user_id=actor.user_id)
         assert run is not None
         return RunOut.model_validate(run)
 
@@ -98,7 +98,7 @@ async def logs(
     """Stream a run's durable transcript from the log store. 404 if the run has produced none."""
     _authorize(actor, "read")
     async with tenant_session(sessionmaker, actor.workspace_id) as session:
-        run = await get_run(session, run_id)  # RLS hides a foreign run → None → 404
+        run = await get_run(session, run_id, user_id=actor.user_id)
     if run is None or run.log_ref is None or not store.exists(run_id):
         raise HTTPException(status_code=404, detail="no logs for this run")
     data, sha256 = store.load(run_id)  # single read; Starlette sets Content-Length from the bytes
