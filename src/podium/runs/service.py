@@ -234,10 +234,7 @@ async def list_run_session_checkpoints(
             await session.execute(
                 select(RunSessionCheckpointRow)
                 .where(RunSessionCheckpointRow.run_id == run_id)
-                .order_by(
-                    RunSessionCheckpointRow.session_id,
-                    RunSessionCheckpointRow.sequence_no,
-                )
+                .order_by(RunSessionCheckpointRow.checkpoint_id)
             )
         )
         .scalars()

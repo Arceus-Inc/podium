@@ -164,6 +164,40 @@ async def test_save_orders_multiple_checkpoints_for_one_session(
     assert first.snapshot_ref != second.snapshot_ref
 
 
+async def test_list_preserves_global_append_order_across_sessions(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    workspace_id, run_id = await _workspace_run(sessionmaker, slug="alpha")
+    async with tenant_session(app_sessionmaker, workspace_id) as session:
+        first = await save_run_session_checkpoint(
+            session,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            handle=_handle(session_id="session-b"),
+            trace=_trace("session-b"),
+            snapshot_ref=_snapshot_ref("first"),
+            trace_ref=_trace_ref("first"),
+        )
+        second = await save_run_session_checkpoint(
+            session,
+            workspace_id=workspace_id,
+            run_id=run_id,
+            handle=_handle(
+                session_id="session-a", saved_at=_SAVED_AT + timedelta(seconds=1)
+            ),
+            trace=_trace("session-a"),
+            snapshot_ref=_snapshot_ref("second"),
+            trace_ref=_trace_ref("second"),
+        )
+        checkpoints = await list_run_session_checkpoints(session, run_id=run_id)
+
+    assert [checkpoint.checkpoint_id for checkpoint in checkpoints] == [
+        first.checkpoint_id,
+        second.checkpoint_id,
+    ]
+
+
 async def test_concurrent_saves_are_serialized_into_one_session_sequence(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
