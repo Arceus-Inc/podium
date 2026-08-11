@@ -17,9 +17,11 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from time import monotonic
+from typing import Any, Protocol, cast
 
 import structlog
+from chorus.events import Event
 from chorus.ledger._models import TaskStatus
 from horizon.model import Decision
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,6 +36,11 @@ from podium.logs import RunLogStore
 from podium.runs import RunStatus, set_engine_task_id
 
 logger = structlog.get_logger("podium.conductor")
+
+
+class _TaskCanceller(Protocol):
+    def cancel_task(self, task_id: str) -> bool: ...
+
 
 _TERMINAL: dict[TaskStatus, RunStatus] = {
     TaskStatus.DONE: RunStatus.SUCCEEDED,
@@ -325,8 +332,9 @@ def _root_resolver(graph: CompanyGraph) -> Any:
 class ChorusRunExecutor:
     """Submit onto the always-on heartbeat and watch the root task to a terminal state.
 
-    ``max_ticks`` is the watch budget in ~1s polls; ``0`` means watch forever (infinite pulses —
-    the company-OS mode). The heartbeat itself always runs until the host closes."""
+    ``max_ticks`` is the watch budget in ~1s periodic cancellation checks; ``0`` means watch
+    forever (infinite pulses — the company-OS mode). The heartbeat itself always runs until the
+    host closes."""
 
     def __init__(self, host: CompanyGraphHost, *, max_ticks: int = 60) -> None:
         self._host = host
@@ -344,7 +352,6 @@ class ChorusRunExecutor:
         engine_task_id: str | None = None,
     ) -> ExecutionResult:
         import asyncio
-        import itertools
 
         runtime = await self._host.ensure(company_id, workspace_id)
         if engine_task_id is not None:
@@ -381,7 +388,13 @@ class ChorusRunExecutor:
         await self._host.attach_run(
             runtime, run_id=run_id, workspace_id=workspace_id, engine_task_id=task_id
         )
-        budget = range(self._max_ticks) if self._max_ticks > 0 else itertools.count()
+        deadline = monotonic() + self._max_ticks if self._max_ticks > 0 else None
+        terminal_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def wake_for_task_event(event: Event) -> None:
+            if event.task_id == task_id:
+                loop.call_soon_threadsafe(terminal_event.set)
 
         def terminal_result() -> ExecutionResult | None:
             current = runtime.graph.org._ledger.tasks.get(task_id)
@@ -392,23 +405,33 @@ class ChorusRunExecutor:
             return ExecutionResult(status=mapped, error=error)
 
         def cancel_or_terminal(fallback: ExecutionResult) -> ExecutionResult:
-            if runtime.graph.org.cancel_task(task_id):
+            if cast(_TaskCanceller, runtime.graph.org).cancel_task(task_id):
                 return fallback
             return terminal_result() or fallback
 
+        unsubscribe = runtime.graph.org._event_bus.subscribe(wake_for_task_event)
         try:
-            for _ in budget:
+            while deadline is None or monotonic() < deadline:
                 if (terminal := terminal_result()) is not None:
                     return terminal
                 if await is_canceled():
                     return cancel_or_terminal(ExecutionResult(status=RunStatus.CANCELED))
-                await asyncio.sleep(1.0)
+                timeout = 1.0 if deadline is None else min(1.0, max(0.0, deadline - monotonic()))
+                if timeout == 0:
+                    break
+                try:
+                    await asyncio.wait_for(terminal_event.wait(), timeout=timeout)
+                except TimeoutError:
+                    pass
+                finally:
+                    terminal_event.clear()
             if (terminal := terminal_result()) is not None:
                 return terminal
             return cancel_or_terminal(
                 ExecutionResult(status=RunStatus.TIMED_OUT, error="exceeded tick budget")
             )
         finally:
+            unsubscribe()
             # A delivery outcome landed — let horizon reflect on it and (human-gated) propose what's
             # next. Formation runs serve no delivery goal, so they don't feed the direction funnel.
             if (params or {}).get("execution_mode") != "formation":
