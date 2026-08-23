@@ -7,6 +7,7 @@ and a foreign workspace's token sees 404, never data.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 
 import httpx
@@ -17,8 +18,15 @@ import podium.db.metadata  # noqa: F401  -- register every model so FK targets r
 from podium.auth import create_api_key
 from podium.companies import create_company
 from podium.control import ControlPlaneProvider
+from podium.control._governance import (
+    ReflectionApplicationAuthorizationView,
+    ReflectionProposalReviewView,
+)
+from podium.control._observe import ReflectionProposalView
 from podium.main import create_app
+from podium.users import create_user
 from podium.workspaces import create_workspace
+from reflection_proposal_support import create_application_run, create_reflection_proposal
 
 
 @pytest_asyncio.fixture
@@ -171,6 +179,321 @@ async def test_read_doors_serve_workforce_teams_capacity_status_skills(
     skills = await _get("/employees/ada/skills")
     assert skills.status_code == 200
     assert [s["slug"] for s in skills.json()] == ["deploy-checklist"]
+
+
+async def test_skill_revision_history_door_is_ordered_and_does_not_leak(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    from chorus.ids import mint_id
+    from chorus.ledger import Ledger
+    from chorus.skills import SkillOrigin, SkillStore
+    from chorus.workforce import Employee
+
+    ws_id, company_id, token = await _seed_company(sessionmaker, slug="history")
+    author_one_id = mint_id()
+    author_two_id = mint_id()
+    author_three_id = mint_id()
+    dsn = database_url.replace("+asyncpg", "").replace("://postgres@", "://podium_app@")
+    ledger = Ledger.open(dsn, company_id=str(company_id))
+    try:
+        ledger.employees.create(Employee(id="ada", name="Ada", role="backend_engineer"))
+        ledger.employees.create(Employee(id="lea", name="Lea", role="pm"))
+        store = SkillStore(ledger)
+        skill, first = store.create(
+            employee_id="ada",
+            slug="deploy-checklist",
+            name="Deploy checklist",
+            description="",
+            when_to_use="",
+            file_inventory=[],
+            origin=SkillOrigin.CREATED,
+            action="create",
+            label="Initial",
+            source_run_ids=("run-one",),
+            author_run_id=author_one_id,
+        )
+        skill_id = skill.id
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="patch",
+            label="Improve rollback",
+            source_run_ids=("run-two", "run-three"),
+            author_run_id=author_two_id,
+        )
+        store.append_revision(
+            skill_id=skill_id,
+            file_inventory=[],
+            action="restore",
+            label="Restore initial",
+            source_run_ids=("run-four",),
+            author_run_id=author_three_id,
+            restored_from_revision_id=first.id,
+        )
+    finally:
+        ledger.close()
+
+    base = f"/v1/workspaces/{ws_id}/companies/{company_id}/employees"
+    headers = httpx.Headers((("Authorization", f"Bearer {token}"),))
+    response = await api.get(f"{base}/ada/skills/{skill_id}/revisions", headers=headers)
+
+    assert response.status_code == 200
+    revisions = response.json()
+    assert [revision["revision_no"] for revision in revisions] == [1, 2, 3]
+    assert revisions[1]["source_run_refs"] == ["run-two", "run-three"]
+    assert revisions[1]["author_run_ref"] == author_two_id
+    assert revisions[2]["restored_from_ref"] == first.id
+    assert revisions[2]["created_at"]
+
+    actual_skill_id = skill_id
+    for employee_id, skill_id in (
+        ("lea", actual_skill_id),
+        ("nobody", actual_skill_id),
+        ("ada", mint_id()),
+    ):
+        missing = await api.get(f"{base}/{employee_id}/skills/{skill_id}/revisions", headers=headers)
+        assert missing.status_code == 404
+        assert missing.json()["error"]["message"] == "skill not found"
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session, workspace_id=ws_id, slug="history-other", name="History other"
+        )
+    isolated = await api.get(
+        f"/v1/workspaces/{ws_id}/companies/{other_company.id}/employees/ada/skills/"
+        f"{actual_skill_id}/revisions",
+        headers=headers,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "skill not found"
+
+
+async def test_reflection_proposal_detail_door_shows_diff_without_tenant_leaks(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, token = await _seed_company(sessionmaker, slug="proposal")
+    proposal = create_reflection_proposal(database_url, company_id, suffix="http")
+    headers = httpx.Headers((("Authorization", f"Bearer {token}"),))
+    base = f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals"
+
+    response = await api.get(f"{base}/{proposal.artifact_revision_id}", headers=headers)
+
+    assert response.status_code == 200
+    view = ReflectionProposalView.model_validate(response.json())
+    assert view.artifact_revision_id == proposal.artifact_revision_id
+    assert view.target.target_id == proposal.target.target_id
+    assert view.diff == proposal.diff
+    assert view.trajectory_refs[1].task_id == proposal.trajectory_refs[1].task_id
+    assert view.evidence_artifact_revision_ids == proposal.evidence_artifact_revision_ids
+
+    for missing_id in ("not-a-uuid", str(uuid.uuid4())):
+        missing = await api.get(f"{base}/{missing_id}", headers=headers)
+        assert missing.status_code == 404
+        assert missing.json()["error"]["message"] == "reflection proposal not found"
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session,
+            workspace_id=workspace_id,
+            slug="proposal-other",
+            name="Proposal other",
+        )
+    isolated = await api.get(
+        f"/v1/workspaces/{workspace_id}/companies/{other_company.id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}",
+        headers=headers,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "reflection proposal not found"
+
+
+async def test_reflection_proposal_review_door_records_one_authenticated_human_verdict(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, service_token = await _seed_company(sessionmaker, slug="review")
+    async with sessionmaker() as session, session.begin():
+        reviewer = await create_user(
+            session,
+            workspace_id=workspace_id,
+            email="reviewer@example.com",
+            name="Reviewer",
+        )
+        _, token = await create_api_key(
+            session,
+            workspace_id=workspace_id,
+            user_id=reviewer.id,
+            name="reviewer-key",
+        )
+    proposal = create_reflection_proposal(database_url, company_id, suffix="review-http")
+    headers = httpx.Headers(
+        (
+            ("Authorization", f"Bearer {token}"),
+            ("Content-Type", "application/json"),
+        )
+    )
+    url = (
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}/reviews"
+    )
+    body = '{"verdict":"accepted","reason":"The visible diff is supported."}'
+
+    service_denied = await api.post(
+        url,
+        headers=httpx.Headers(
+            (
+                ("Authorization", f"Bearer {service_token}"),
+                ("Content-Type", "application/json"),
+            )
+        ),
+        content=body,
+    )
+    assert service_denied.status_code == 403
+    assert service_denied.json()["error"]["message"] == "human reviewer required"
+
+    response = await api.post(url, headers=headers, content=body)
+
+    assert response.status_code == 201
+    review = ReflectionProposalReviewView.model_validate(response.json())
+    assert review.proposal_artifact_revision_id == proposal.artifact_revision_id
+    assert review.verdict == "accepted"
+    assert review.reviewer_user_id == str(reviewer.id)
+    assert review.reason == "The visible diff is supported."
+
+    duplicate = await api.post(url, headers=headers, content=body)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["message"] == "reflection proposal already reviewed"
+
+    spoofed = await api.post(
+        url,
+        headers=headers,
+        content=(
+            '{"verdict":"rejected","reason":"No",'
+            '"reviewer_user_id":"client-controlled"}'
+        ),
+    )
+    assert spoofed.status_code == 422
+
+    blank_reason = await api.post(
+        url,
+        headers=headers,
+        content='{"verdict":"rejected","reason":" "}',
+    )
+    assert blank_reason.status_code == 422
+
+    invalid = await api.post(
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        "not-a-uuid/reviews",
+        headers=headers,
+        content=body,
+    )
+    assert invalid.status_code == 404
+
+    async with sessionmaker() as session, session.begin():
+        other_company = await create_company(
+            session,
+            workspace_id=workspace_id,
+            slug="review-other",
+            name="Review other",
+        )
+    isolated = await api.post(
+        f"/v1/workspaces/{workspace_id}/companies/{other_company.id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}/reviews",
+        headers=headers,
+        content=body,
+    )
+    assert isolated.status_code == 404
+    assert isolated.json()["error"]["message"] == "reflection proposal not found"
+
+
+async def test_reflection_application_authorization_binds_one_existing_queued_run(
+    database_url: str,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    api: httpx.AsyncClient,
+) -> None:
+    workspace_id, company_id, service_token = await _seed_company(
+        sessionmaker,
+        slug="application",
+    )
+    async with sessionmaker() as session, session.begin():
+        reviewer = await create_user(
+            session,
+            workspace_id=workspace_id,
+            email="application-reviewer@example.com",
+            name="Application reviewer",
+        )
+        _, token = await create_api_key(
+            session,
+            workspace_id=workspace_id,
+            user_id=reviewer.id,
+            name="application-reviewer-key",
+        )
+    proposal = create_reflection_proposal(database_url, company_id, suffix="application-http")
+    application_run = create_application_run(
+        database_url,
+        company_id,
+        suffix="application-http",
+    )
+    headers = httpx.Headers(
+        (
+            ("Authorization", f"Bearer {token}"),
+            ("Content-Type", "application/json"),
+        )
+    )
+    proposal_url = (
+        f"/v1/workspaces/{workspace_id}/companies/{company_id}/reflection-proposals/"
+        f"{proposal.artifact_revision_id}"
+    )
+    review_response = await api.post(
+        f"{proposal_url}/reviews",
+        headers=headers,
+        content='{"verdict":"accepted","reason":"Approved for a separate run."}',
+    )
+    assert review_response.status_code == 201
+
+    authorization_url = f"{proposal_url}/application-authorizations"
+    body = f'{{"application_run_id":"{application_run.id}"}}'
+    service_denied = await api.post(
+        authorization_url,
+        headers=httpx.Headers(
+            (
+                ("Authorization", f"Bearer {service_token}"),
+                ("Content-Type", "application/json"),
+            )
+        ),
+        content=body,
+    )
+    assert service_denied.status_code == 403
+    assert service_denied.json()["error"]["message"] == "human reviewer required"
+
+    response = await api.post(authorization_url, headers=headers, content=body)
+
+    assert response.status_code == 201
+    authorization = ReflectionApplicationAuthorizationView.model_validate(response.json())
+    review = ReflectionProposalReviewView.model_validate(review_response.json())
+    assert authorization.proposal_artifact_revision_id == proposal.artifact_revision_id
+    assert authorization.review_id == review.id
+    assert authorization.application_run_id == application_run.id
+    assert authorization.authorized_by_user_id == str(reviewer.id)
+
+    duplicate = await api.post(authorization_url, headers=headers, content=body)
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["message"] == "reflection application already authorized"
+
+    spoofed = await api.post(
+        authorization_url,
+        headers=headers,
+        content=(
+            f'{{"application_run_id":"{application_run.id}",'
+            '"authorized_by_user_id":"client-controlled"}'
+        ),
+    )
+    assert spoofed.status_code == 422
 
 
 async def test_patch_goal_archives_it(
