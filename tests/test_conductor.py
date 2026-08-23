@@ -387,6 +387,7 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
     from types import SimpleNamespace
 
     from chorus.ledger import TaskStatus
+    from chorus.observability import EventBus
 
     from podium.conductor._chorus_executor import ChorusRunExecutor
 
@@ -399,6 +400,7 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
         graph=SimpleNamespace(
             org=SimpleNamespace(
                 submit=_forbidden_submit,
+                _event_bus=EventBus(),
                 _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: done_task)),
             )
         ),
@@ -411,7 +413,9 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
         async def ensure(self, company_id: object, workspace_id: object) -> object:
             return runtime
 
-        async def attach_run(self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str) -> None:
+        async def attach_run(
+            self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str
+        ) -> None:
             attached.append(engine_task_id)
 
         def write_direction_report(self, rt: object, company_id: object) -> None:
