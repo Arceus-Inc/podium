@@ -13,7 +13,15 @@ import uuid
 from dataclasses import dataclass, field
 
 from chorus.ledger import Ledger
+from horizon.store.postgres import (
+    PostgresDecisionRepository,
+    PostgresProposalRepository,
+    PostgresStrategyRepository,
+    open_postgres_connection,
+)
+from psycopg import Connection
 
+from podium._resource_lifecycle import close_owned_resources
 from podium.control._allocation import AllocationFacade
 from podium.control._comments import CommentsFacade
 from podium.control._delegation import DelegationFacade
@@ -23,6 +31,7 @@ from podium.control._observe import ObserveFacade
 from podium.control._routines import RoutinesFacade
 from podium.control._session_state import SessionStateFacade
 from podium.control._workforce import WorkforceFacade
+from podium.evaluations import EvalRunComparisonFacade
 
 
 class CompanyControlPlane:
@@ -32,10 +41,20 @@ class CompanyControlPlane:
     engine internals never escape the plane (M4 §3.1).
     """
 
-    def __init__(self, *, workspace_id: uuid.UUID, company_id: uuid.UUID, ledger: Ledger) -> None:
+    def __init__(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        company_id: uuid.UUID,
+        ledger: Ledger,
+        horizon_connection: Connection[tuple[object, ...]],
+        direction: DirectionFacade,
+    ) -> None:
         self.workspace_id = workspace_id
         self.company_id = company_id
         self._ledger = ledger
+        self._horizon_connection = horizon_connection
+        self._direction = direction
 
     @property
     def allocation(self) -> AllocationFacade:
@@ -43,7 +62,7 @@ class CompanyControlPlane:
 
     @property
     def direction(self) -> DirectionFacade:
-        return DirectionFacade(self._ledger)
+        return self._direction
 
     @property
     def workforce(self) -> WorkforceFacade:
@@ -70,12 +89,15 @@ class CompanyControlPlane:
         return CommentsFacade(self._ledger)
 
     @property
+    def evaluations(self) -> EvalRunComparisonFacade:
+        return EvalRunComparisonFacade(self._ledger)
+
     def session_state(self) -> SessionStateFacade:
         return SessionStateFacade(self._ledger)
 
     def close(self) -> None:
-        """Release the plane's engine connection."""
-        self._ledger.close()
+        """Release the plane's Horizon and Chorus connections even if one close fails."""
+        close_owned_resources(self._horizon_connection.close, self._ledger.close)
 
 
 @dataclass(frozen=True)
@@ -86,7 +108,30 @@ class ControlPlaneProvider:
 
     def read_plane(self, *, workspace_id: uuid.UUID, company_id: uuid.UUID) -> CompanyControlPlane:
         ledger = Ledger.open(self.engine_dsn, company_id=str(company_id))
-        return CompanyControlPlane(workspace_id=workspace_id, company_id=company_id, ledger=ledger)
+        horizon_connection: Connection[tuple[object, ...]] | None = None
+        try:
+            horizon_connection = open_postgres_connection(self.engine_dsn, company_id=company_id)
+            direction = DirectionFacade(
+                ledger,
+                decisions=PostgresDecisionRepository(horizon_connection),
+                strategy=PostgresStrategyRepository(horizon_connection),
+                proposals=PostgresProposalRepository(horizon_connection),
+            )
+            return CompanyControlPlane(
+                workspace_id=workspace_id,
+                company_id=company_id,
+                ledger=ledger,
+                horizon_connection=horizon_connection,
+                direction=direction,
+            )
+        except BaseException as error:
+            closers = (
+                (horizon_connection.close, ledger.close)
+                if horizon_connection is not None
+                else (ledger.close,)
+            )
+            close_owned_resources(*closers, primary=error)
+            raise
 
 
 __all__ = ["CompanyControlPlane", "ControlPlaneProvider"]

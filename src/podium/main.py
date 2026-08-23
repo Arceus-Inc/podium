@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Response
-from sqlalchemy import text
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
 from cockpit.router import router as cockpit_router
@@ -20,13 +19,17 @@ from podium.control import ControlPlaneProvider
 from podium.control.router import router as control_router
 from podium.db import make_engine, make_sessionmaker
 from podium.dev import router as dev_router
+from podium.evaluations.router import router as evaluations_router
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
 from podium.http_errors import cache_problem_openapi, install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
+from podium.product_events.router import router as product_events_router
 from podium.runs.router import router as runs_router
 from podium.settings import get_settings
+from podium.stream_tickets.router import router as stream_tickets_router
+from podium.timeline.router import router as timeline_router
 
 
 @asynccontextmanager
@@ -94,31 +97,27 @@ def create_app() -> FastAPI:
 
     @app.get("/readyz")
     async def readyz(response: Response) -> dict[str, str]:
-        # Readiness must actually touch the DB — a probe that lies is worse than none — and
-        # prove every shipped engine delta is applied (a skipped migrate step reads not-ready).
-        from chorus.ledger import load_migrations
+        # Readiness proves the database is reachable and all engine migration streams are valid.
+        # The public response stays intentionally generic: migration state is deployment internals.
+        from podium.db.engine_migrations import verify_engine_migrations
 
         try:
             async with app.state.sessionmaker() as session:
-                applied = {
-                    row[0]
-                    for row in await session.execute(
-                        text("SELECT id FROM chorus_schema_migrations")
-                    )
-                }
+                connection = await session.connection()
+                await connection.run_sync(verify_engine_migrations)
         except Exception:
             response.status_code = 503
             return {"status": "unavailable"}
-        pending = sorted(m.id for m in load_migrations() if m.id not in applied)
-        if pending:
-            response.status_code = 503
-            return {"status": "unavailable", "engine_deltas": f"pending: {', '.join(pending)}"}
-        return {"status": "ready", "engine_deltas": "applied"}
+        return {"status": "ready"}
 
     app.include_router(companies_router)
     app.include_router(runs_router)
     app.include_router(events_router)
+    app.include_router(evaluations_router)
+    app.include_router(product_events_router)
+    app.include_router(stream_tickets_router)
     app.include_router(control_router)
+    app.include_router(timeline_router)
     app.include_router(cockpit_shell_router)
     app.include_router(dev_router)
     app.include_router(cockpit_router)

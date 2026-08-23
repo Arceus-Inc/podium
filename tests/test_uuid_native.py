@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from podium.auth import create_api_key
+from podium.auth import Actor, create_api_key
 from podium.companies import create_company
 from podium.conductor import enqueue_command
 from podium.db import tenant_session
 from podium.runs import create_run
+from podium.stream_tickets import StreamTicket, hash_stream_ticket, mint_stream_ticket
 from podium.users import create_user
 from podium.workspaces import create_workspace
 
@@ -39,6 +40,10 @@ _UUID_COLUMNS = {
     ("commands", "workspace_id"),
     ("commands", "company_id"),
     ("commands", "run_id"),
+    ("stream_tickets", "id"),
+    ("stream_tickets", "workspace_id"),
+    ("stream_tickets", "company_id"),
+    ("stream_tickets", "actor_id"),
     ("events", "company_id"),
     ("events", "workspace_id"),
     ("events", "run_id"),
@@ -60,7 +65,22 @@ async def test_every_entity_id_is_a_db_minted_uuid7(
             s, workspace_id=ws_id, company_id=company_id, directive="d", idempotency_key="k"
         )
         command = await enqueue_command(s, workspace_id=ws_id, company_id=company_id, type="cancel")
-        minted += [run.id, command.id]
+        actor = Actor(
+            workspace_id=ws_id,
+            company_id=None,
+            actor_type="service",
+            actor_id=key.id,
+        )
+        stream_ticket = await mint_stream_ticket(
+            s, workspace_id=ws_id, company_id=company_id, actor=actor
+        )
+        ticket_row = await s.scalar(
+            select(StreamTicket.id).where(
+                StreamTicket.ticket_hash == hash_stream_ticket(stream_ticket.ticket)
+            )
+        )
+        assert ticket_row is not None
+        minted += [run.id, command.id, ticket_row]
     for value in minted:
         assert isinstance(value, uuid.UUID), f"expected uuid.UUID, got {type(value)}: {value!r}"
         assert value.version == 7  # DB-minted uuidv7 — time-ordered, never random-v4
@@ -83,6 +103,41 @@ async def test_id_columns_are_native_uuid_in_postgres(
     assert set(found) == _UUID_COLUMNS  # every expected column exists
     wrong = {key: dtype for key, dtype in found.items() if dtype != "uuid"}
     assert wrong == {}, f"non-uuid id columns: {wrong}"
+
+
+async def test_stream_ticket_ttl_constraint_is_declared_in_metadata_and_database(
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    metadata_constraint_sql = {
+        str(constraint.sqltext)
+        for constraint in StreamTicket.__table__.constraints
+        if getattr(constraint, "sqltext", None) is not None
+    }
+    async with sessionmaker() as session:
+        database_constraints = set(
+            (
+                await session.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint "
+                        "WHERE conrelid = 'stream_tickets'::regclass"
+                    )
+                )
+            ).scalars()
+        )
+        ttl_definition = await session.scalar(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conrelid = 'stream_tickets'::regclass "
+                "AND conname LIKE '%ck_stream_tickets_exact_ttl'"
+            )
+        )
+
+    assert "expires_at = created_at + interval '60 seconds'" in metadata_constraint_sql
+    assert any(
+        constraint_name.endswith("ck_stream_tickets_exact_ttl")
+        for constraint_name in database_constraints
+    )
+    assert ttl_definition == "CHECK ((expires_at = (created_at + '00:01:00'::interval)))"
 
 
 async def test_rls_still_bites_with_uuid_guc(

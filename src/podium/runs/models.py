@@ -81,6 +81,9 @@ class Run(Base):
 
     __table_args__ = (
         UniqueConstraint("company_id", "idempotency_key"),  # idempotent create per company
+        UniqueConstraint(
+            "id", "company_id", "workspace_id", name="uq_runs_id_company_id_workspace_id"
+        ),
         UniqueConstraint("workspace_id", "id"),  # composite child FKs keep workspace ownership hard
         Index("ix_runs_workspace_id", "workspace_id"),
         Index("ix_runs_company_id_status", "company_id", "status"),  # scheduler dispatch

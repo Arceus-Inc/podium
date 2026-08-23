@@ -1,17 +1,17 @@
-"""DirectionFacade — the alignment tree (chorus goals; horizon's local mirror) as podium DTOs.
-
-Proposals/decisions are horizon workdir stores and land with the CP-2 doors (heartbeat side);
-the read plane serves the ledger-backed tree.
-"""
+"""DirectionFacade — Chorus goals plus Horizon's persisted direction state as Podium DTOs."""
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict
+from horizon.generation import Proposal
+from horizon.model import Decision, StrategyRecord
+from pydantic import BaseModel, ConfigDict, field_validator
 
 if TYPE_CHECKING:
     from chorus.ledger import Ledger
+    from horizon.ports import DecisionRepository, ProposalRepository, StrategyRepository
 
 
 class GoalNode(BaseModel):
@@ -27,11 +27,157 @@ class GoalNode(BaseModel):
     children: list[GoalNode]
 
 
-class DirectionFacade:
-    """Pure delegation to the engine's goal table; recursion is shape, not business logic."""
+class DecisionView(BaseModel):
+    """One persisted Horizon decision, expressed without engine model types."""
 
-    def __init__(self, ledger: Ledger) -> None:
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    statement: str
+    status: str
+    owner: str | None
+    rationale: str
+    goal_ids: tuple[str, ...]
+
+
+class TaskOutcomeView(BaseModel):
+    """One durable outcome attached to a strategy record's task."""
+
+    model_config = ConfigDict(frozen=True)
+
+    task_id: str
+    outcome: str | None
+    revision: int | None
+
+
+class StaffingRequirementView(BaseModel):
+    """One strategy-owned staffing constraint."""
+
+    model_config = ConfigDict(frozen=True)
+
+    profession: str
+    count: int
+    coverage: str
+    outcome_area: str | None
+
+
+class StrategyView(BaseModel):
+    """One complete Horizon strategy record, flattened into frozen product DTOs."""
+
+    model_config = ConfigDict(frozen=True)
+
+    goal_id: str
+    title: str
+    score: float
+    health: str
+    metric: str | None
+    target: str | None
+    evidence: tuple[str, ...]
+    decision_id: str | None
+    task_id: str | None
+    root_task_id: str | None
+    task_ids: tuple[str, ...]
+    team_id: str | None
+    lead_id: str | None
+    task_outcomes: tuple[TaskOutcomeView, ...]
+    outcome_event_ids: tuple[str, ...]
+    delivery_shape: str
+    lead_professions: tuple[str, ...]
+    staffing_requirements: tuple[StaffingRequirementView, ...]
+    passes: int
+    fails: int
+    last_outcome_at: str | None
+    done: bool
+    attempts: int
+    needs_recovery: bool
+    last_diagnostic: str
+
+
+class CandidateGoalView(BaseModel):
+    """A candidate goal proposed by Horizon's evidence-gated funnel."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    metric: str
+    target: str
+    rationale: str
+    score: float
+
+
+class DirectionBriefView(BaseModel):
+    """The analyst evidence attached to a pending direction proposal."""
+
+    model_config = ConfigDict(frozen=True)
+
+    candidate_id: str
+    recommendation: str
+    rationale: str
+    confidence: float
+    risks: tuple[str, ...]
+    candidate_goals: tuple[CandidateGoalView, ...]
+    evidence_refs: tuple[str, ...]
+
+
+class ProposalView(BaseModel):
+    """One human-gated Horizon proposal, including its optional analyst brief."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    status: str
+    brief: DirectionBriefView | None
+    decision_statement: str
+    decision_rationale: str
+    created_at: datetime | None
+    decided_by: str | None
+    decided_at: datetime | None
+    linked_decision_id: str | None
+    note: str
+
+    @field_validator("created_at", "decided_at")
+    @classmethod
+    def _require_utc_timestamp(cls, value: datetime | None) -> datetime | None:
+        """Horizon Postgres timestamps are absolute instants, never local or naive clock values."""
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() != timedelta():
+            raise ValueError("timestamp must be UTC")
+        return value.astimezone(UTC)
+
+
+class DirectionFacade:
+    """Read-only composition of Chorus goals and Horizon's direction repositories."""
+
+    def __init__(
+        self,
+        ledger: Ledger,
+        *,
+        decisions: DecisionRepository,
+        strategy: StrategyRepository,
+        proposals: ProposalRepository,
+    ) -> None:
         self._ledger = ledger
+        self._decisions = decisions
+        self._strategy = strategy
+        self._proposals = proposals
+
+    def decisions(self) -> list[DecisionView]:
+        """Every Horizon decision in the repository's durable insertion order."""
+        return [self._decision_view(decision) for decision in self._decisions.all()]
+
+    def decision(self, decision_id: str) -> DecisionView | None:
+        """One Horizon decision, or ``None`` when the company does not own that ID."""
+        decision = self._decisions.get(decision_id)
+        return self._decision_view(decision) if decision is not None else None
+
+    def strategies(self) -> list[StrategyView]:
+        """Every Horizon strategy record as a frozen product view."""
+        return [self._strategy_view(record) for record in self._strategy.all()]
+
+    def proposals(self) -> list[ProposalView]:
+        """Every human-gated direction proposal, including evidence when present."""
+        return [self._proposal_view(proposal) for proposal in self._proposals.all()]
 
     def create_goal(
         self, *, title: str, level: str, parent_id: str | None = None
@@ -96,5 +242,123 @@ class DirectionFacade:
             )
         return nodes
 
+    @staticmethod
+    def _strategy_view(record: StrategyRecord) -> StrategyView:
+        task_ids = sorted(set(record.task_outcomes) | set(record.task_outcome_revisions))
+        return StrategyView(
+            goal_id=record.goal_id,
+            title=record.title,
+            score=record.score,
+            health=record.health,
+            metric=record.metric,
+            target=record.target,
+            evidence=tuple(record.evidence),
+            decision_id=record.decision_id,
+            task_id=record.task_id,
+            root_task_id=record.root_task_id,
+            task_ids=tuple(record.task_ids),
+            team_id=record.team_id,
+            lead_id=record.lead_id,
+            task_outcomes=tuple(
+                TaskOutcomeView(
+                    task_id=task_id,
+                    outcome=record.task_outcomes.get(task_id),
+                    revision=record.task_outcome_revisions.get(task_id),
+                )
+                for task_id in task_ids
+            ),
+            outcome_event_ids=tuple(record.outcome_event_ids),
+            delivery_shape=record.delivery_shape,
+            lead_professions=record.lead_professions,
+            staffing_requirements=tuple(
+                StaffingRequirementView(
+                    profession=requirement.profession,
+                    count=requirement.count,
+                    coverage=requirement.coverage,
+                    outcome_area=requirement.outcome_area,
+                )
+                for requirement in record.staffing_requirements
+            ),
+            passes=record.passes,
+            fails=record.fails,
+            last_outcome_at=record.last_outcome_at,
+            done=record.done,
+            attempts=record.attempts,
+            needs_recovery=record.needs_recovery,
+            last_diagnostic=record.last_diagnostic,
+        )
 
-__all__ = ["DirectionFacade", "GoalNode"]
+    @staticmethod
+    def _decision_view(decision: Decision) -> DecisionView:
+        """Translate a public Horizon decision record at the product boundary."""
+        return DecisionView(
+            id=decision.id,
+            statement=decision.statement,
+            status=decision.status,
+            owner=decision.owner,
+            rationale=decision.rationale,
+            goal_ids=tuple(decision.goal_ids),
+        )
+
+    @staticmethod
+    def _proposal_view(proposal: Proposal) -> ProposalView:
+        brief = proposal.brief
+        return ProposalView(
+            id=proposal.id,
+            status=proposal.status,
+            brief=(
+                DirectionBriefView(
+                    candidate_id=brief.candidate_id,
+                    recommendation=brief.recommendation,
+                    rationale=brief.rationale,
+                    confidence=brief.confidence,
+                    risks=tuple(brief.risks),
+                    candidate_goals=tuple(
+                        CandidateGoalView(
+                            title=goal.title,
+                            metric=goal.metric,
+                            target=goal.target,
+                            rationale=goal.rationale,
+                            score=goal.score,
+                        )
+                        for goal in brief.candidate_goals
+                    ),
+                    evidence_refs=tuple(brief.evidence_refs),
+                )
+                if brief is not None
+                else None
+            ),
+            decision_statement=proposal.decision_statement,
+            decision_rationale=proposal.decision_rationale,
+            created_at=(
+                DirectionFacade._parse_proposal_timestamp(proposal.created_at)
+                if proposal.created_at
+                else None
+            ),
+            decided_by=proposal.decided_by,
+            decided_at=(
+                DirectionFacade._parse_proposal_timestamp(proposal.decided_at)
+                if proposal.decided_at is not None
+                else None
+            ),
+            linked_decision_id=proposal.linked_decision_id,
+            note=proposal.note,
+        )
+
+    @staticmethod
+    def _parse_proposal_timestamp(value: str) -> datetime:
+        """Parse Horizon's Postgres RFC 3339 text before the DTO enforces its UTC invariant."""
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+__all__ = [
+    "CandidateGoalView",
+    "DecisionView",
+    "DirectionBriefView",
+    "DirectionFacade",
+    "GoalNode",
+    "ProposalView",
+    "StaffingRequirementView",
+    "StrategyView",
+    "TaskOutcomeView",
+]

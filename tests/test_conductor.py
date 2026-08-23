@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Awaitable, Callable
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import podium.db.metadata  # noqa: F401  -- register every model so FK targets resolve
@@ -379,14 +380,16 @@ def test_executor_max_ticks_comes_from_settings() -> None:
     assert conductor._executor._max_ticks == 240
 
 
-async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
+async def test_reclaimed_run_resumes_watch_instead_of_resubmitting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Found live 2026-07-18 (videocursor): a server restart reclaimed a running delegation
     run and execute() re-submitted a SECOND engine root — which self-accepted over an empty
     subtree and marked the run succeeded while the real root sat stranded. The run row already
     carries engine_task_id; a reclaim must resume the watch on it, never submit again."""
     from types import SimpleNamespace
 
-    from chorus.ledger import TaskStatus
+    from chorus.ledger import FinalizationJudgment, TaskStatus
     from chorus.observability import EventBus
 
     from podium.conductor._chorus_executor import ChorusRunExecutor
@@ -424,6 +427,13 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
         async def propose_next_direction(self, rt: object) -> None:
             pass  # the real host drives horizon's proposal funnel; irrelevant to the reclaim contract
 
+    from podium.conductor import _chorus_executor as chorus_executor
+
+    monkeypatch.setattr(
+        chorus_executor,
+        "judge_task_finalization",
+        lambda _ledger, _task_id: FinalizationJudgment(True),
+    )
     executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
 
     async def never_canceled() -> bool:
@@ -440,3 +450,244 @@ async def test_reclaimed_run_resumes_watch_instead_of_resubmitting() -> None:
     )
     assert result.status == RunStatus.SUCCEEDED
     assert attached == ["task-1"]  # the mirror re-registers, so events keep routing
+
+
+async def test_done_root_fails_when_chorus_finalization_judge_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from chorus.ledger import FinalizationFailureReason, FinalizationJudgment, TaskStatus
+
+    from podium.conductor import _chorus_executor as chorus_executor
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
+
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(
+            org=SimpleNamespace(
+                _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: done_task)),
+            )
+        ),
+        assignee="ace",
+        ceo="casey",
+    )
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(
+            self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str
+        ) -> None:
+            pass
+
+        def write_direction_report(self, rt: object, company_id: object) -> None:
+            pass
+
+        async def propose_next_direction(self, rt: object) -> None:
+            pass
+
+    monkeypatch.setattr(
+        chorus_executor,
+        "judge_task_finalization",
+        lambda _ledger, _task_id: FinalizationJudgment(
+            False, FinalizationFailureReason.PRIMARY_VERIFIED_ARTIFACT_MISSING
+        ),
+    )
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.error == "goal_judge:primary_verified_artifact_missing"
+
+
+async def test_approved_prebeat_acceptance_root_succeeds_without_run_evidence() -> None:
+    from types import SimpleNamespace
+
+    from chorus.ledger import (
+        Approval,
+        ApprovalAction,
+        ApprovalGate,
+        ApprovalStatus,
+        ApprovalSubjectKind,
+        TaskStatus,
+    )
+
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
+    approval = Approval(
+        id="approval-1",
+        subject_kind=ApprovalSubjectKind.TASK,
+        subject_id="task-1",
+        reason="public acceptance",
+        action=ApprovalAction.TASK_GATE,
+        status=ApprovalStatus.APPROVED,
+        gate_kind=ApprovalGate.ACCEPTANCE,
+    )
+    ledger = SimpleNamespace(
+        tasks=SimpleNamespace(get=lambda _task_id: done_task),
+        dod=SimpleNamespace(get_for_task=lambda _task_id: None),
+        runs=SimpleNamespace(get=lambda _run_id: None),
+        artifacts=SimpleNamespace(list_for_task=lambda _task_id: []),
+        approvals=SimpleNamespace(for_subject=lambda _task_id: [approval]),
+    )
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(org=SimpleNamespace(_ledger=ledger)),
+        assignee="ace",
+        ceo="casey",
+    )
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(
+            self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str
+        ) -> None:
+            pass
+
+        def write_direction_report(self, rt: object, company_id: object) -> None:
+            pass
+
+        async def propose_next_direction(self, rt: object) -> None:
+            pass
+
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+
+
+async def test_missing_root_task_fails_with_stable_goal_judge_reason() -> None:
+    from types import SimpleNamespace
+
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(
+            org=SimpleNamespace(
+                _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: None)),
+            )
+        ),
+        assignee="ace",
+        ceo="casey",
+    )
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(
+            self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str
+        ) -> None:
+            pass
+
+        def write_direction_report(self, rt: object, company_id: object) -> None:
+            pass
+
+        async def propose_next_direction(self, rt: object) -> None:
+            pass
+
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.error == "goal_judge:task_missing"
+
+
+async def test_goal_judge_exception_returns_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from chorus.ledger import TaskStatus
+
+    from podium.conductor import _chorus_executor as chorus_executor
+    from podium.conductor._chorus_executor import ChorusRunExecutor
+
+    done_task = SimpleNamespace(id="task-1", status=TaskStatus.DONE)
+    runtime = SimpleNamespace(
+        graph=SimpleNamespace(
+            org=SimpleNamespace(
+                _ledger=SimpleNamespace(tasks=SimpleNamespace(get=lambda _tid: done_task)),
+            )
+        ),
+        assignee="ace",
+        ceo="casey",
+    )
+
+    class _Host:
+        async def ensure(self, company_id: object, workspace_id: object) -> object:
+            return runtime
+
+        async def attach_run(
+            self, rt: object, *, run_id: object, workspace_id: object, engine_task_id: str
+        ) -> None:
+            pass
+
+        def write_direction_report(self, rt: object, company_id: object) -> None:
+            pass
+
+        async def propose_next_direction(self, rt: object) -> None:
+            pass
+
+    def _boom(_ledger: object, _task_id: str) -> object:
+        raise RuntimeError("judge exploded")
+
+    monkeypatch.setattr(chorus_executor, "judge_task_finalization", _boom)
+    executor = ChorusRunExecutor(_Host(), max_ticks=5)  # type: ignore[arg-type]
+
+    async def never_canceled() -> bool:
+        return False
+
+    result = await executor.execute(
+        run_id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        directive="d",
+        is_canceled=never_canceled,
+        params={"execution_mode": "delegation", "lead": "x", "goal_id": "g"},
+        engine_task_id="task-1",
+    )
+
+    assert result.status == RunStatus.FAILED
+    assert result.error == "goal_judge:internal_error"
