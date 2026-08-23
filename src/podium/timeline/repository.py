@@ -3,14 +3,34 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from podium.events.models import Event
 from podium.timeline.models import ProjectionCursor, TimelineItem
 from podium.timeline.service_types import TimelineItemDraft
+
+TIMELINE_PROJECTOR = "timeline-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class TimelinePage:
+    """A bounded keyset page from the durable timeline projection."""
+
+    items: tuple[TimelineItem, ...]
+    has_more: bool
+    as_of_seq: int
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineCursor:
+    """The durable projection position used for timeline pagination."""
+
+    source_event_seq: int
 
 
 async def source_event_exists(
@@ -141,3 +161,65 @@ async def clear_projection(
             ProjectionCursor.projector == projector,
         )
     )
+
+
+async def get_item(
+    session: AsyncSession, *, company_id: uuid.UUID, item_id: uuid.UUID
+) -> TimelineItem | None:
+    stmt = select(TimelineItem).where(
+        TimelineItem.company_id == company_id,
+        TimelineItem.id == item_id,
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def page_items(
+    session: AsyncSession,
+    *,
+    company_id: uuid.UUID,
+    limit: int,
+    cursor: TimelineCursor | None = None,
+    category: str | None = None,
+    attention: bool | None = None,
+    actor_type: str | None = None,
+    actor_id: str | None = None,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    occurred_after: datetime | None = None,
+    occurred_before: datetime | None = None,
+) -> TimelinePage:
+    """Read one newest-first page without consulting the source-event store."""
+    filters = [TimelineItem.company_id == company_id]
+    if category is not None:
+        filters.append(TimelineItem.category == category)
+    if attention is not None:
+        filters.append(TimelineItem.attention.is_(attention))
+    if actor_type is not None:
+        filters.append(TimelineItem.actor_type == actor_type)
+    if actor_id is not None:
+        filters.append(TimelineItem.actor_id == actor_id)
+    if subject_type is not None:
+        filters.append(TimelineItem.subject_type == subject_type)
+    if subject_id is not None:
+        filters.append(TimelineItem.subject_id == subject_id)
+    if occurred_after is not None:
+        filters.append(TimelineItem.occurred_at >= occurred_after)
+    if occurred_before is not None:
+        filters.append(TimelineItem.occurred_at <= occurred_before)
+    projection_cursor = await get_cursor(
+        session, company_id=company_id, projector=TIMELINE_PROJECTOR
+    )
+    as_of_seq = projection_cursor.last_event_seq if projection_cursor is not None else 0
+    filters.append(TimelineItem.source_event_seq <= as_of_seq)
+    if cursor is not None:
+        filters.append(TimelineItem.source_event_seq < cursor.source_event_seq)
+    stmt = (
+        select(TimelineItem)
+        .where(*filters)
+        .order_by(
+            desc(TimelineItem.source_event_seq),
+        )
+        .limit(limit + 1)
+    )
+    rows = tuple((await session.execute(stmt)).scalars())
+    return TimelinePage(items=rows[:limit], has_more=len(rows) > limit, as_of_seq=as_of_seq)
