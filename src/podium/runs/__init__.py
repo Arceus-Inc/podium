@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
+from podium.runs.models import TERMINAL_STATUSES, Run, RunSessionCheckpointRow, RunStatus
 from podium.runs.service import (
     IdempotencyKeyReuseError,
+    CheckpointReplayConflictError,
+    CheckpointSessionMismatchError,
+    DurableArtifactRef,
     RunRef,
+    RunSessionCheckpoint,
     active_engine_tasks,
     claim_queued_run,
     create_run,
     expired_lease_refs,
     finalize_run,
     get_run,
+    list_run_session_checkpoints,
     list_runs,
     queued_run_refs,
     reclaim_run,
@@ -19,22 +24,41 @@ from podium.runs.service import (
     request_cancel,
     request_fingerprint,
     rollup_run_counts,
+    save_run_session_checkpoint,
     set_engine_task_id,
     set_log_ref,
+)
+from podium.runs.session_state import (
+    AgentSessionCost,
+    AgentSessionStatus,
+    AgentSessionView,
+    RunSessionState,
+    SessionRecoveryReason,
 )
 
 __all__ = [
     "TERMINAL_STATUSES",
     "IdempotencyKeyReuseError",
+    "AgentSessionCost",
+    "AgentSessionStatus",
+    "AgentSessionView",
+    "CheckpointReplayConflictError",
+    "CheckpointSessionMismatchError",
+    "DurableArtifactRef",
     "Run",
     "RunRef",
+    "RunSessionCheckpoint",
+    "RunSessionCheckpointRow",
+    "RunSessionState",
     "RunStatus",
+    "SessionRecoveryReason",
     "active_engine_tasks",
     "claim_queued_run",
     "create_run",
     "expired_lease_refs",
     "finalize_run",
     "get_run",
+    "list_run_session_checkpoints",
     "list_runs",
     "queued_run_refs",
     "reclaim_run",
@@ -42,6 +66,7 @@ __all__ = [
     "request_cancel",
     "request_fingerprint",
     "rollup_run_counts",
+    "save_run_session_checkpoint",
     "set_engine_task_id",
     "set_log_ref",
 ]
