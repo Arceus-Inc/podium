@@ -22,6 +22,7 @@ from podium.db import tenant_session
 from podium.events import EVENTS_CHANNEL, Event, append_event, max_company_seq
 from podium.logs import RunLogStore, excerpt_payload
 from podium.runs import active_engine_tasks, set_log_ref
+from podium.timeline.projector import TimelineProjectionLag, TimelineProjector
 
 
 def _uuid_or_none(value: str | None) -> uuid.UUID | None:
@@ -56,6 +57,11 @@ class EventMirror:
         self._next_seq: int | None = None
         # Chorus-minted task ids (text, engine context) → podium run ids (uuid).
         self._task_to_run: dict[str, uuid.UUID] = {}
+        self._timeline_projector = TimelineProjector(
+            sessionmaker,
+            company_id=company_id,
+            workspace_id=workspace_id,
+        )
         self._lock = (
             asyncio.Lock()
         )  # serialise seq assignment even if record() is called concurrently
@@ -64,12 +70,19 @@ class EventMirror:
         """Tell the mirror which podium run a chorus root task belongs to (for event routing)."""
         self._task_to_run[engine_task_id] = run_id
 
+    @property
+    def timeline_lag(self) -> TimelineProjectionLag:
+        """The latest timeline catch-up state for this company."""
+        return self._timeline_projector.lag
+
     async def rehydrate(self) -> None:
         """Rebuild the routing map from `runs.engine_task_id` — call on (re)host so events for a run
         that was in flight at restart are still attributed instead of falling to company-level."""
-        async with tenant_session(self._sm, self._workspace_id) as session:
-            for run_id, engine_task_id in await active_engine_tasks(session, self._company_id):
-                self._task_to_run[engine_task_id] = run_id
+        async with self._lock:
+            async with tenant_session(self._sm, self._workspace_id) as session:
+                for run_id, engine_task_id in await active_engine_tasks(session, self._company_id):
+                    self._task_to_run[engine_task_id] = run_id
+            await self._timeline_projector.catch_up()
 
     async def record(
         self,
@@ -128,6 +141,9 @@ class EventMirror:
             if full_text is not None and run_id is not None and self._log_store is not None:
                 self._log_store.append(run_id, full_text)
             self._next_seq = seq + 1
+            # Projection begins after the raw event transaction commits. A corrupt raw event can
+            # halt its materialized view, but can never undo the durable company event.
+            await self._timeline_projector.catch_up()
             return event
 
 

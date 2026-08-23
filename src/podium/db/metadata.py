@@ -11,5 +11,6 @@ from podium.companies import models as companies  # noqa: F401
 from podium.conductor import models as conductor  # noqa: F401
 from podium.events import models as events  # noqa: F401
 from podium.runs import models as runs  # noqa: F401
+from podium.timeline import models as timeline  # noqa: F401
 from podium.users import models as users  # noqa: F401
 from podium.workspaces import models as workspaces  # noqa: F401

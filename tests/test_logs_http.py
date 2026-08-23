@@ -16,6 +16,7 @@ from podium.db import tenant_session
 from podium.logs import RunLogStore
 from podium.main import create_app
 from podium.runs import create_run
+from podium.users import create_user
 from podium.workspaces import create_workspace
 
 
@@ -69,6 +70,12 @@ async def test_logs_returns_the_transcript(
     assert resp.headers["content-type"].startswith("text/plain")
     assert resp.text == "a full transcript →"
     assert len(resp.headers["x-log-sha256"]) == 64
+    canonical = await client.get(
+        f"/v1/workspaces/{ws_id}/companies/{company_id}/runs/{run_id}/logs",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert canonical.headers["content-type"].startswith("text/plain")
+    assert canonical.text == resp.text
 
 
 async def test_logs_404_when_run_has_none(
@@ -103,3 +110,66 @@ async def test_logs_cross_tenant_404(
         f"/v1/runs/{run_id}/logs", headers={"Authorization": f"Bearer {other_token}"}
     )
     assert resp.status_code == 404
+
+
+async def test_logs_hide_another_users_company_in_the_same_workspace(
+    api: tuple[httpx.AsyncClient, RunLogStore],
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _store = api
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="A", slug="a")
+        owner = await create_user(session, workspace_id=workspace.id, email="owner@a.io", name="Owner")
+        peer = await create_user(session, workspace_id=workspace.id, email="peer@a.io", name="Peer")
+        company = await create_company(
+            session,
+            workspace_id=workspace.id,
+            slug="owned",
+            name="Owned",
+            owner_user_id=owner.id,
+        )
+        _, peer_token = await create_api_key(
+            session, workspace_id=workspace.id, name="peer-key", user_id=peer.id
+        )
+    async with tenant_session(sessionmaker, workspace.id) as session:
+        run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=company.id,
+            directive="d",
+            idempotency_key="k1",
+        )
+
+    for url in (
+        f"/v1/runs/{run.id}/logs",
+        f"/v1/workspaces/{workspace.id}/companies/{company.id}/runs/{run.id}/logs",
+    ):
+        assert (await client.get(url, headers={"Authorization": f"Bearer {peer_token}"})).status_code == 404
+
+
+async def test_logs_hide_another_company_from_a_scoped_service_key(
+    api: tuple[httpx.AsyncClient, RunLogStore],
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _store = api
+    async with sessionmaker() as session, session.begin():
+        workspace = await create_workspace(session, name="A", slug="a")
+        allowed_company = await create_company(session, workspace_id=workspace.id, slug="allowed", name="Allowed")
+        target_company = await create_company(session, workspace_id=workspace.id, slug="target", name="Target")
+        _, token = await create_api_key(
+            session, workspace_id=workspace.id, company_id=allowed_company.id, name="scoped-key"
+        )
+    async with tenant_session(sessionmaker, workspace.id) as session:
+        run, _ = await create_run(
+            session,
+            workspace_id=workspace.id,
+            company_id=target_company.id,
+            directive="d",
+            idempotency_key="k1",
+        )
+
+    for url in (
+        f"/v1/runs/{run.id}/logs",
+        f"/v1/workspaces/{workspace.id}/companies/{target_company.id}/runs/{run.id}/logs",
+    ):
+        assert (await client.get(url, headers={"Authorization": f"Bearer {token}"})).status_code == 404

@@ -23,11 +23,12 @@ from podium.dev import router as dev_router
 from podium.evaluations.router import router as evaluations_router
 from podium.events import Broadcaster
 from podium.events.router import router as events_router
-from podium.http_errors import install_error_handlers
+from podium.http_errors import cache_problem_openapi, install_error_handlers
 from podium.logging import configure_logging
 from podium.logs import RunLogStore
 from podium.runs.router import router as runs_router
 from podium.settings import get_settings
+from podium.timeline.router import router as timeline_router
 
 
 @asynccontextmanager
@@ -121,9 +122,11 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(evaluations_router)
     app.include_router(control_router)
+    app.include_router(timeline_router)
     app.include_router(cockpit_shell_router)
     app.include_router(dev_router)
     app.include_router(cockpit_router)
+    cache_problem_openapi(app)
     return app
 
 

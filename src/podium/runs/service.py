@@ -5,19 +5,34 @@ Callers pass a `tenant_session`; RLS scopes every statement to the run's workspa
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from dream import RunTrace, SessionHandle
-from sqlalchemy import case, func, select, text, update
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import and_, case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from podium.companies import get_company
 from podium.runs.models import TERMINAL_STATUSES, Run, RunSessionCheckpointRow, RunStatus
 
 _CONDUCTOR_CHANNEL = "podium_conductor"
+
+
+class IdempotencyKeyReuseError(Exception):
+    """A client reused a key for a request whose execution would differ."""
+
+
+def request_fingerprint(*, directive: str, params: dict[str, object] | None) -> str:
+    canonical = json.dumps(
+        (directive, params or {}), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -32,6 +47,12 @@ class RunRef:
     # Set on a run that already submitted its engine root — a reclaim resumes the watch on it
     # instead of re-submitting (found live 2026-07-18: a restart minted a duplicate root).
     engine_task_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RunCursor:
+    created_at: datetime
+    id: uuid.UUID
 
 
 class CheckpointSessionMismatchError(ValueError):
@@ -256,6 +277,7 @@ async def create_run(
 
     The id is DB-minted (uuidv7 server default) and comes back through RETURNING.
     """
+    request_fingerprint_value = request_fingerprint(directive=directive, params=params)
     now = _now()
     stmt = (
         pg_insert(Run)
@@ -264,6 +286,7 @@ async def create_run(
             company_id=company_id,
             directive=directive,
             idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint_value,
             params=params or {},
             status=RunStatus.QUEUED,
             counts={},
@@ -282,6 +305,15 @@ async def create_run(
                 )
             )
         ).scalar_one()
+        existing_fingerprint = existing.request_fingerprint
+        if existing_fingerprint == "":
+            existing_fingerprint = request_fingerprint(
+                directive=existing.directive, params=existing.params
+            )
+            if existing_fingerprint == request_fingerprint_value:
+                existing.request_fingerprint = existing_fingerprint
+        if existing_fingerprint != request_fingerprint_value:
+            raise IdempotencyKeyReuseError
         return existing, False
     # Wake the conductor in the same transaction that created the work.
     await session.execute(
@@ -293,12 +325,53 @@ async def create_run(
     return run, True
 
 
-async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
-    return await session.get(Run, run_id)
+async def get_run(
+    session: AsyncSession, run_id: uuid.UUID, *, user_id: uuid.UUID | None = None
+) -> Run | None:
+    """Fetch a run within the tenant session, optionally enforcing company visibility."""
+    run = await session.get(Run, run_id)
+    if run is None or await get_company(session, run.company_id, user_id=user_id) is None:
+        return None
+    return run
+
+
+async def get_visible_run(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    user_id: uuid.UUID | None,
+    company_id: uuid.UUID | None = None,
+) -> Run | None:
+    """Return a run only when its company is visible to this workspace actor."""
+    run = await get_run(session, run_id)
+    if run is None or (company_id is not None and run.company_id != company_id):
+        return None
+    company = await get_company(session, run.company_id, user_id=user_id)
+    return run if company is not None else None
 
 
 async def list_runs(session: AsyncSession, company_id: uuid.UUID) -> Sequence[Run]:
     stmt = select(Run).where(Run.company_id == company_id).order_by(Run.created_at.desc())
+    return (await session.execute(stmt)).scalars().all()
+
+
+async def list_runs_page(
+    session: AsyncSession,
+    company_id: uuid.UUID,
+    *,
+    cursor: RunCursor | None,
+    limit: int,
+) -> Sequence[Run]:
+    """A bounded, newest-first run page using `(created_at, id)` as its stable keyset."""
+    stmt = select(Run).where(Run.company_id == company_id)
+    if cursor is not None:
+        stmt = stmt.where(
+            or_(
+                Run.created_at < cursor.created_at,
+                and_(Run.created_at == cursor.created_at, Run.id < cursor.id),
+            )
+        )
+    stmt = stmt.order_by(Run.created_at.desc(), Run.id.desc()).limit(limit)
     return (await session.execute(stmt)).scalars().all()
 
 

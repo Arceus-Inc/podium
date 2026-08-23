@@ -12,7 +12,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from podium.auth import create_api_key
+from podium.companies.schemas import CompanyOut
 from podium.main import create_app
+from podium.runs.schemas import RunOut
 from podium.users import create_user
 from podium.workspaces import create_workspace
 
@@ -81,6 +83,28 @@ async def test_workspace_peer_cannot_see_anothers_company(
     assert (
         await api.get(f"/v1/workspaces/{ws_id}/companies/{company_id}", headers=_auth(t1))
     ).status_code == 200
+
+
+async def test_workspace_peer_cannot_read_or_cancel_anothers_run(
+    api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
+) -> None:
+    ws_id, t1, t2, _svc = await _workspace_with_two_users(sessionmaker)
+    company_response = await api.post(
+        f"/v1/workspaces/{ws_id}/companies", json={"slug": "c1", "name": "C1"}, headers=_auth(t1)
+    )
+    assert company_response.status_code == 201, company_response.text
+    company = CompanyOut.model_validate(company_response.json())
+    run_response = await api.post(
+        f"/v1/companies/{company.id}/runs",
+        json={"directive": "d", "idempotency_key": "k"},
+        headers=_auth(t1),
+    )
+    assert run_response.status_code == 202, run_response.text
+    run = RunOut.model_validate(run_response.json())
+    assert (
+        await api.get(f"/v1/companies/{company.id}/runs/{run.id}", headers=_auth(t2))
+    ).status_code == 404
+    assert (await api.post(f"/v1/runs/{run.id}/cancel", headers=_auth(t2))).status_code == 404
 
 
 async def test_service_key_operates_workspace_wide(

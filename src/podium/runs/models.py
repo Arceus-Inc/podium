@@ -60,6 +60,7 @@ class Run(Base):
     company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id"))
     directive: Mapped[str] = mapped_column(String)
     idempotency_key: Mapped[str] = mapped_column(String)
+    request_fingerprint: Mapped[str] = mapped_column(String)
     # Chorus-minted root-task id — engine context, text until the M5.2 engine port.
     engine_task_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default=RunStatus.QUEUED)
