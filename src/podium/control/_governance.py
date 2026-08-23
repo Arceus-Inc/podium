@@ -8,20 +8,18 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Literal
 
-from chorus.governance import ApprovalDecision, GovernanceResolver, HumanAuthorization
+from chorus.ids import mint_id
 from chorus.ledger import (
-    Approval,
-    ApprovalAction,
-    ApprovalGate,
-    ApprovalStatus,
-    ApprovalSubjectKind,
-    AuthenticationMethod,
-    AuthorizationVerdict,
-    HumanAuthorizationProof,
+    LedgerIntegrityError,
+    ReflectionApplicationAuthorization,
+    ReflectionProposalReview,
+    ReflectionProposalVerdict,
 )
 from pydantic import BaseModel, ConfigDict
+
+from podium.control._observe import UnknownReflectionProposalError
 
 if TYPE_CHECKING:
     from chorus.governance import WorkforcePlanService
@@ -36,78 +34,47 @@ class PlanConflictError(ValueError):
     """The plan is not in a decidable state (already applied/rejected/superseded)."""
 
 
-class TaskSubjectRef(BaseModel):
-    """The task an approval gates."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["task"] = "task"
-    id: str
+class ReflectionProposalAlreadyReviewedError(ValueError):
+    """The proposal revision already has its one final human verdict."""
 
 
-class ArtifactSubjectRef(BaseModel):
-    """The artifact an approval gates."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["artifact"] = "artifact"
-    id: str
+class ReflectionApplicationAlreadyAuthorizedError(ValueError):
+    """The proposal already has its single-use application authorization."""
 
 
-class EmployeeSubjectRef(BaseModel):
-    """The employee a hire approval gates."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["employee"] = "employee"
-    id: str
+class ReflectionApplicationConflictError(ValueError):
+    """The accepted review or queued-run invariants do not authorize this handoff."""
 
 
-class BudgetIncidentSubjectRef(BaseModel):
-    """The budget incident an override approval gates."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["budget_incident"] = "budget_incident"
-    id: str
+class UnknownApplicationRunError(ValueError):
+    """No such application run in this company."""
 
 
-ApprovalSubjectRef: TypeAlias = (
-    TaskSubjectRef | ArtifactSubjectRef | EmployeeSubjectRef | BudgetIncidentSubjectRef
-)
-
-
-class ApprovalView(BaseModel):
-    """One persisted human gate, projected directly from Chorus's approval ledger."""
+class ReflectionApplicationAuthorizationView(BaseModel):
+    """The auditable handoff from an accepted proposal to one separate queued run."""
 
     model_config = ConfigDict(frozen=True)
 
     id: str
-    subject: ApprovalSubjectRef
-    reason: str
-    action: ApprovalAction
-    status: ApprovalStatus
-    gate_kind: ApprovalGate | None
-    decided_by_user_id: str | None
-    decided_at: datetime | None
-    expires_at: datetime | None
+    proposal_artifact_revision_id: str
+    review_id: str
+    proposal_source_run_id: str
+    application_run_id: str
+    authorized_by_user_id: str
     created_at: datetime
 
 
-class ApprovalDecisionView(BaseModel):
-    """Immutable evidence for one authenticated human approval decision."""
+class ReflectionProposalReviewView(BaseModel):
+    """One authenticated final human verdict for an exact proposal revision."""
 
     model_config = ConfigDict(frozen=True)
 
-    decision_id: str
-    approval_id: str
-    user_id: str
-    method: AuthenticationMethod
-    authenticated_at: datetime
-    decided_at: datetime
-    request_id: str
-    request_hash: str
-    verdict: AuthorizationVerdict
+    id: str
+    proposal_artifact_revision_id: str
+    verdict: Literal["accepted", "rejected"]
+    reviewer_user_id: str
+    reason: str
+    created_at: datetime
 
 
 class PlannedEmployeeView(BaseModel):
@@ -188,54 +155,6 @@ def _view(plan: WorkforcePlan) -> PlanView:
     )
 
 
-def _subject_view(approval: Approval) -> ApprovalSubjectRef:
-    match approval.subject_kind:
-        case ApprovalSubjectKind.TASK:
-            return TaskSubjectRef(id=approval.subject_id)
-        case ApprovalSubjectKind.ARTIFACT:
-            return ArtifactSubjectRef(id=approval.subject_id)
-        case ApprovalSubjectKind.EMPLOYEE:
-            return EmployeeSubjectRef(id=approval.subject_id)
-        case ApprovalSubjectKind.BUDGET_INCIDENT:
-            return BudgetIncidentSubjectRef(id=approval.subject_id)
-
-
-def _require_created_at(approval: Approval) -> datetime:
-    """Chorus assigns every persisted approval a creation timestamp."""
-    if approval.created_at is None:
-        raise RuntimeError(f"persisted approval {approval.id!r} has no created_at")
-    return approval.created_at
-
-
-def _approval_view(approval: Approval) -> ApprovalView:
-    return ApprovalView(
-        id=approval.id,
-        subject=_subject_view(approval),
-        reason=approval.reason,
-        action=approval.action,
-        status=approval.status,
-        gate_kind=approval.gate_kind,
-        decided_by_user_id=approval.decided_by_user_id,
-        decided_at=approval.decided_at,
-        expires_at=approval.expires_at,
-        created_at=_require_created_at(approval),
-    )
-
-
-def _decision_view(proof: HumanAuthorizationProof) -> ApprovalDecisionView:
-    return ApprovalDecisionView(
-        decision_id=proof.decision_id,
-        approval_id=proof.approval_id,
-        user_id=proof.user_id,
-        method=proof.method,
-        authenticated_at=proof.authenticated_at,
-        decided_at=proof.decided_at,
-        request_id=proof.request_id,
-        request_hash=proof.request_hash,
-        verdict=proof.verdict,
-    )
-
-
 class GovernanceFacade:
     """Pure delegation to the engine's plan service; translation, never business logic."""
 
@@ -258,45 +177,6 @@ class GovernanceFacade:
         """Every persisted plan revision, newest last — proposed ones are the pending inbox."""
         return [_view(plan) for plan in self._ledger.workforce_plans.list()]
 
-    def pending_approvals(self) -> list[ApprovalView]:
-        """Open approval gates, oldest first; Chorus excludes expired gates itself."""
-        return [_approval_view(approval) for approval in self._ledger.approvals.pending()]
-
-    def approval(self, approval_id: str) -> ApprovalView | None:
-        """One persisted gate in this company, whatever its status."""
-        try:
-            uuid.UUID(approval_id)
-        except ValueError:
-            return None
-        approval = self._ledger.approvals.get(approval_id)
-        return _approval_view(approval) if approval is not None else None
-
-    def authorization_proof_by_nonce(self, nonce: str) -> ApprovalDecisionView | None:
-        """Read a tenant-scoped, immutable decision proof by its derived idempotency nonce."""
-        proof = GovernanceResolver(self._ledger).get_authorization_proof_by_nonce(nonce)
-        return _decision_view(proof) if proof is not None else None
-
-    def decide_approval(
-        self,
-        approval_id: str,
-        *,
-        verdict: Literal["approve", "deny", "request_revision", "hold"],
-        authorization: HumanAuthorization,
-    ) -> ApprovalDecisionView:
-        """Use Chorus's authenticated public governance API for a generic approval verdict."""
-        resolver = GovernanceResolver(self._ledger)
-        if verdict == "hold":
-            return _decision_view(resolver.hold_authenticated(approval_id, authorization=authorization))
-        resolver.resolve_authenticated(
-            approval_id,
-            decision=ApprovalDecision(verdict),
-            authorization=authorization,
-        )
-        proof = resolver.get_authorization_proof_by_nonce(authorization.nonce)
-        if proof is None:
-            raise RuntimeError("authenticated approval decision did not persist a proof")
-        return _decision_view(proof)
-
     def approve(self, plan_id: str, *, by: str) -> PlanView:
         """Atomically materialize the latest valid proposal as an audited human decision."""
         return self._decide(plan_id, by=by, approve=True)
@@ -304,6 +184,106 @@ class GovernanceFacade:
     def reject(self, plan_id: str, *, by: str) -> PlanView:
         """Reject the latest proposed revision without touching the workforce."""
         return self._decide(plan_id, by=by, approve=False)
+
+    def review_reflection_proposal(
+        self,
+        artifact_revision_id: str,
+        *,
+        verdict: Literal["accepted", "rejected"],
+        by: str,
+        reason: str,
+    ) -> ReflectionProposalReviewView:
+        """Record the authenticated human's one final verdict without applying the diff."""
+        try:
+            uuid.UUID(artifact_revision_id)
+        except ValueError:
+            raise UnknownReflectionProposalError(artifact_revision_id) from None
+        if self._ledger.reflection_proposals.get(artifact_revision_id) is None:
+            raise UnknownReflectionProposalError(artifact_revision_id)
+        if self._ledger.reflection_proposal_reviews.for_proposal(artifact_revision_id) is not None:
+            raise ReflectionProposalAlreadyReviewedError(artifact_revision_id)
+        review = ReflectionProposalReview(
+            id=mint_id(),
+            proposal_artifact_revision_id=artifact_revision_id,
+            verdict=ReflectionProposalVerdict(verdict),
+            reviewer_user_id=by,
+            reason=reason,
+        )
+        try:
+            recorded = self._ledger.reflection_proposal_reviews.record(review)
+        except LedgerIntegrityError as exc:
+            raise ReflectionProposalAlreadyReviewedError(artifact_revision_id) from exc
+        if recorded.created_at is None:
+            raise RuntimeError("persisted reflection proposal review is missing created_at")
+        return ReflectionProposalReviewView(
+            id=recorded.id,
+            proposal_artifact_revision_id=recorded.proposal_artifact_revision_id,
+            verdict=recorded.verdict.value,
+            reviewer_user_id=recorded.reviewer_user_id,
+            reason=recorded.reason,
+            created_at=recorded.created_at,
+        )
+
+    def authorize_reflection_application(
+        self,
+        artifact_revision_id: str,
+        *,
+        application_run_id: str,
+        by: str,
+    ) -> ReflectionApplicationAuthorizationView:
+        """Bind an accepted review to one existing queued run without executing that run."""
+        try:
+            uuid.UUID(artifact_revision_id)
+        except ValueError:
+            raise UnknownReflectionProposalError(artifact_revision_id) from None
+        proposal = self._ledger.reflection_proposals.get(artifact_revision_id)
+        if proposal is None:
+            raise UnknownReflectionProposalError(artifact_revision_id)
+        if (
+            self._ledger.reflection_application_authorizations.for_proposal(
+                artifact_revision_id
+            )
+            is not None
+        ):
+            raise ReflectionApplicationAlreadyAuthorizedError(artifact_revision_id)
+
+        review = self._ledger.reflection_proposal_reviews.accepted(artifact_revision_id)
+        if review is None or review.reviewer_user_id != by:
+            raise ReflectionApplicationConflictError(
+                "reflection application requires the authenticated reviewer's accepted verdict"
+            )
+        try:
+            uuid.UUID(application_run_id)
+        except ValueError:
+            raise UnknownApplicationRunError(application_run_id) from None
+        if self._ledger.runs.get(application_run_id) is None:
+            raise UnknownApplicationRunError(application_run_id)
+
+        authorization = ReflectionApplicationAuthorization(
+            id=mint_id(),
+            proposal_artifact_revision_id=artifact_revision_id,
+            review_id=review.id,
+            proposal_source_run_id=proposal.source_run_id,
+            application_run_id=application_run_id,
+            authorized_by_user_id=by,
+        )
+        try:
+            recorded = self._ledger.reflection_application_authorizations.issue(authorization)
+        except LedgerIntegrityError as exc:
+            raise ReflectionApplicationAlreadyAuthorizedError(artifact_revision_id) from exc
+        except ValueError as exc:
+            raise ReflectionApplicationConflictError(str(exc)) from exc
+        if recorded.created_at is None:
+            raise RuntimeError("persisted reflection application authorization is missing created_at")
+        return ReflectionApplicationAuthorizationView(
+            id=recorded.id,
+            proposal_artifact_revision_id=recorded.proposal_artifact_revision_id,
+            review_id=recorded.review_id,
+            proposal_source_run_id=recorded.proposal_source_run_id,
+            application_run_id=recorded.application_run_id,
+            authorized_by_user_id=recorded.authorized_by_user_id,
+            created_at=recorded.created_at,
+        )
 
     def _decide(self, plan_id: str, *, by: str, approve: bool) -> PlanView:
         import uuid
@@ -329,12 +309,16 @@ class GovernanceFacade:
 
 
 __all__ = [
-    "ApprovalDecisionView",
-    "ApprovalView",
     "GovernanceFacade",
     "ManagementGrantView",
     "PlanConflictError",
     "PlanView",
     "PlannedEmployeeView",
+    "ReflectionApplicationAlreadyAuthorizedError",
+    "ReflectionApplicationAuthorizationView",
+    "ReflectionApplicationConflictError",
+    "ReflectionProposalAlreadyReviewedError",
+    "ReflectionProposalReviewView",
+    "UnknownApplicationRunError",
     "UnknownPlanError",
 ]
