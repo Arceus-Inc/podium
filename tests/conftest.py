@@ -119,7 +119,7 @@ async def _clean(database_url: str) -> AsyncIterator[None]:
         await conn.execute(
             text(
                 "TRUNCATE workspaces, companies, api_keys, users, runs, commands, events, "
-                "projection_cursors, timeline_items, entity_edges CASCADE"
+                "projection_cursors, timeline_items, entity_edges, stream_tickets CASCADE"
             )
         )
     await engine.dispose()

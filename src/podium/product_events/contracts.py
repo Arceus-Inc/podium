@@ -28,6 +28,25 @@ ProductEventType: TypeAlias = Literal[
     "projection.rebuild_required",
 ]
 
+PRODUCT_EVENT_TYPES: tuple[ProductEventType, ...] = (
+    "home.updated",
+    "timeline.item.created",
+    "timeline.item.updated",
+    "attention.requested",
+    "attention.resolved",
+    "conversation.message.created",
+    "conversation.message.updated",
+    "decision.updated",
+    "goal.updated",
+    "task.updated",
+    "task.activity.created",
+    "deliverable.updated",
+    "employee.updated",
+    "team.updated",
+    "learning.updated",
+    "projection.rebuild_required",
+)
+
 
 class ProductEventActor(BaseModel):
     """The actor that caused a product event without imposing a product taxonomy."""
@@ -62,16 +81,13 @@ class ProductEventSubject(BaseModel):
         return value
 
 
-class ProductEvent(BaseModel):
-    """The normalized v1 product event envelope."""
+class _ProductEventBody(BaseModel):
+    """The validated data common to a product-event draft and durable envelope."""
 
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid", frozen=True)
 
     schema_version: Literal[1] = 1
-    event_id: str = Field(min_length=1)
-    seq: int = Field(gt=0)
     type: ProductEventType
-    company_id: str = Field(min_length=1)
     occurred_at: datetime
     actor: ProductEventActor
     subject: ProductEventSubject
@@ -80,7 +96,7 @@ class ProductEvent(BaseModel):
     changed_fields: tuple[str, ...] = Field(min_length=1)
     data: ProductEventData = Field(default_factory=dict)
 
-    @field_validator("event_id", "company_id", "causation_id", "correlation_id")
+    @field_validator("causation_id", "correlation_id")
     @classmethod
     def _require_nonblank_identity(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -101,4 +117,41 @@ class ProductEvent(BaseModel):
             raise ValueError("changed_fields must not contain blank values")
         if len(set(value)) != len(value):
             raise ValueError("changed_fields must be unique")
+        return value
+
+
+class ProductEventDraft(_ProductEventBody):
+    """A validated normalized event before the database assigns identity and sequence."""
+
+    def storage_payload(self) -> ProductEventData:
+        """The JSONB representation that is independent of database-assigned envelope fields."""
+        return {
+            "schema_version": self.schema_version,
+            "type": self.type,
+            "occurred_at": self.occurred_at.isoformat(),
+            "actor": {"type": self.actor.type, "id": self.actor.id},
+            "subject": {
+                "type": self.subject.type,
+                "id": self.subject.id,
+                "version": self.subject.version,
+            },
+            "causation_id": self.causation_id,
+            "correlation_id": self.correlation_id,
+            "changed_fields": list(self.changed_fields),
+            "data": self.data,
+        }
+
+
+class ProductEvent(_ProductEventBody):
+    """The normalized v1 product event envelope."""
+
+    event_id: str = Field(min_length=1)
+    seq: int = Field(gt=0)
+    company_id: str = Field(min_length=1)
+
+    @field_validator("event_id", "company_id")
+    @classmethod
+    def _require_nonblank_durable_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("identity values must not be blank")
         return value

@@ -32,6 +32,7 @@ from horizon.store.postgres import (
 )
 from psycopg import Connection
 
+from podium._resource_lifecycle import close_owned_resources
 from podium.conductor.company._bridge import ChorusGoalStore, ChorusIntakePort, ChorusOutcomeFeed
 
 
@@ -67,10 +68,7 @@ class CompanyGraph:
 
     def close(self) -> None:
         """Release the company's owned Horizon and Chorus Postgres connections."""
-        try:
-            self.horizon_connection.close()
-        finally:
-            self.org._ledger.close()
+        close_owned_resources(self.horizon_connection.close, self.org._ledger.close)
 
 
 def _open_ledger(config: CompanyConfig) -> Ledger:
@@ -88,13 +86,11 @@ def build(config: CompanyConfig) -> CompanyGraph:
     plugins = list(config.roles) if config.roles is not None else list(default_roles())
     registry = RoleRegistry.from_plugins(plugins)
     ledger = _open_ledger(config)
-    # Spend is priced at the beat seam (spec 04 §3): without a TokenPricing every beat reports
-    # cost_cents=0 and the priced ledger stays empty (found by the live e2e — llm.call events
-    # carried cost while cost_event had none). Env-tunable default rates price every model.
-    pricing = default_pricing_from_env()
-
     horizon_connection: Connection[tuple[object, ...]] | None = None
     try:
+        # Spend is priced at the beat seam (spec 04 §3): without a TokenPricing every beat reports
+        # cost_cents=0 and the priced ledger stays empty. Env-tunable defaults price every model.
+        pricing = default_pricing_from_env()
         chorus_company_id = str(config.company_id)
         factory = EmployeeHarnessFactory(
             api_key=config.api_key,
@@ -175,8 +171,11 @@ def build(config: CompanyConfig) -> CompanyGraph:
             ceo_factory=ceo_factory,
             horizon_connection=horizon_connection,
         )
-    except BaseException:
-        if horizon_connection is not None:
-            horizon_connection.close()
-        ledger.close()
+    except BaseException as error:
+        closers = (
+            (horizon_connection.close, ledger.close)
+            if horizon_connection is not None
+            else (ledger.close,)
+        )
+        close_owned_resources(*closers, primary=error)
         raise

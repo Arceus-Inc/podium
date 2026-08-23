@@ -28,12 +28,15 @@ _KEEPALIVE_SECONDS = 15.0
 async def resolve_stream_actor(
     request: Request, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> Actor:
-    """Auth for SSE: a Bearer header, or `?access_token=` (browsers' EventSource can't set headers)."""
+    """Auth for raw diagnostic SSE: bearer header only, never a query credential."""
+    if request.query_params.get("access_token") is not None or request.query_params.get(
+        "ticket"
+    ) is not None:
+        raise HTTPException(status_code=401, detail="unauthorized")
     header = request.headers.get("authorization")
     token: str | None = None
     if header and header.lower().startswith("bearer "):
         token = header[7:].strip() or None
-    token = token or request.query_params.get("access_token")
     async with sessionmaker() as session:
         actor = await resolve_actor(session, token)
     if actor is None:

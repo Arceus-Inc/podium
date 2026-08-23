@@ -21,6 +21,7 @@ from horizon.store.postgres import (
 )
 from psycopg import Connection
 
+from podium._resource_lifecycle import close_owned_resources
 from podium.control._allocation import AllocationFacade
 from podium.control._comments import CommentsFacade
 from podium.control._delegation import DelegationFacade
@@ -96,10 +97,7 @@ class CompanyControlPlane:
 
     def close(self) -> None:
         """Release the plane's Horizon and Chorus connections even if one close fails."""
-        try:
-            self._horizon_connection.close()
-        finally:
-            self._ledger.close()
+        close_owned_resources(self._horizon_connection.close, self._ledger.close)
 
 
 @dataclass(frozen=True)
@@ -126,10 +124,13 @@ class ControlPlaneProvider:
                 horizon_connection=horizon_connection,
                 direction=direction,
             )
-        except BaseException:
-            if horizon_connection is not None:
-                horizon_connection.close()
-            ledger.close()
+        except BaseException as error:
+            closers = (
+                (horizon_connection.close, ledger.close)
+                if horizon_connection is not None
+                else (ledger.close,)
+            )
+            close_owned_resources(*closers, primary=error)
             raise
 
 
