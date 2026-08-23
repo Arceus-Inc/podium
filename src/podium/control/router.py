@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar
 
 from chorus.errors import OrgInvariantViolation
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -25,13 +25,27 @@ from podium.control._comments import (
 )
 from podium.control._delegation import CapacityEntry, TeamSummary
 from podium.control._direction import GoalNode
-from podium.control._governance import PlanConflictError, PlanView, UnknownPlanError
+from podium.control._governance import (
+    PlanConflictError,
+    PlanView,
+    ReflectionApplicationAlreadyAuthorizedError,
+    ReflectionApplicationAuthorizationView,
+    ReflectionApplicationConflictError,
+    ReflectionProposalAlreadyReviewedError,
+    ReflectionProposalReviewView,
+    UnknownApplicationRunError,
+    UnknownPlanError,
+)
 from podium.control._observe import (
     ArtifactSummary,
     CompanyStatus,
     OrgReport,
+    ReflectionProposalView,
+    SkillRevisionView,
     SkillSummary,
     SpendRow,
+    UnknownReflectionProposalError,
+    UnknownSkillError,
     UnknownTaskError,
     WhyLink,
 )
@@ -200,6 +214,151 @@ async def employee_skills(
         company_id=company_id,
         read=lambda plane: plane.observe.skills(employee_id),
     )
+
+
+@router.get(
+    "/employees/{employee_id}/skills/{skill_id}/revisions",
+    response_model=tuple[SkillRevisionView, ...],
+)
+async def skill_revision_history(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: str,
+    skill_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> tuple[SkillRevisionView, ...]:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.skill_revisions(employee_id, skill_id),
+        )
+    except UnknownSkillError as exc:
+        raise HTTPException(status_code=404, detail="skill not found") from exc
+
+
+@router.get(
+    "/reflection-proposals/{artifact_revision_id}",
+    response_model=ReflectionProposalView,
+)
+async def reflection_proposal_detail(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    artifact_revision_id: str,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> ReflectionProposalView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.observe.reflection_proposal(artifact_revision_id),
+        )
+    except UnknownReflectionProposalError as exc:
+        raise HTTPException(status_code=404, detail="reflection proposal not found") from exc
+
+
+_ReviewReason = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=4000),
+]
+
+
+class ReflectionProposalReviewCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    verdict: Literal["accepted", "rejected"]
+    reason: _ReviewReason
+
+
+@router.post(
+    "/reflection-proposals/{artifact_revision_id}/reviews",
+    status_code=201,
+    response_model=ReflectionProposalReviewView,
+)
+async def review_reflection_proposal(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    artifact_revision_id: str,
+    body: ReflectionProposalReviewCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> ReflectionProposalReviewView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    if actor.user_id is None:
+        raise HTTPException(status_code=403, detail="human reviewer required")
+    reviewer_user_id = str(actor.user_id)
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.governance.review_reflection_proposal(
+                artifact_revision_id,
+                verdict=body.verdict,
+                by=reviewer_user_id,
+                reason=body.reason,
+            ),
+        )
+    except UnknownReflectionProposalError as exc:
+        raise HTTPException(status_code=404, detail="reflection proposal not found") from exc
+    except ReflectionProposalAlreadyReviewedError as exc:
+        raise HTTPException(status_code=409, detail="reflection proposal already reviewed") from exc
+
+
+class ReflectionApplicationAuthorizationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    application_run_id: uuid.UUID
+
+
+@router.post(
+    "/reflection-proposals/{artifact_revision_id}/application-authorizations",
+    status_code=201,
+    response_model=ReflectionApplicationAuthorizationView,
+)
+async def authorize_reflection_application(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    artifact_revision_id: str,
+    body: ReflectionApplicationAuthorizationCreate,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> ReflectionApplicationAuthorizationView:
+    await _visible_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    if actor.user_id is None:
+        raise HTTPException(status_code=403, detail="human reviewer required")
+    try:
+        return await _plane_read(
+            provider,
+            workspace_id=workspace_id,
+            company_id=company_id,
+            read=lambda plane: plane.governance.authorize_reflection_application(
+                artifact_revision_id,
+                application_run_id=str(body.application_run_id),
+                by=str(actor.user_id),
+            ),
+        )
+    except UnknownReflectionProposalError as exc:
+        raise HTTPException(status_code=404, detail="reflection proposal not found") from exc
+    except UnknownApplicationRunError as exc:
+        raise HTTPException(status_code=404, detail="application run not found") from exc
+    except ReflectionApplicationAlreadyAuthorizedError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="reflection application already authorized",
+        ) from exc
+    except ReflectionApplicationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class GoalPatch(BaseModel):
