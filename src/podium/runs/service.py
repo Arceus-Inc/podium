@@ -10,11 +10,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from dream import RunTrace, SessionHandle
 from sqlalchemy import case, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from podium.runs.models import TERMINAL_STATUSES, Run, RunStatus
+from podium.runs.models import TERMINAL_STATUSES, Run, RunSessionCheckpointRow, RunStatus
 
 _CONDUCTOR_CHANNEL = "podium_conductor"
 
@@ -33,8 +34,213 @@ class RunRef:
     engine_task_id: str | None = None
 
 
+class CheckpointSessionMismatchError(ValueError):
+    """A Dream trace belongs to a different session than the snapshot handle."""
+
+
+class CheckpointReplayConflictError(ValueError):
+    """A checkpoint identity was replayed with different durable fields."""
+
+
+@dataclass(frozen=True)
+class DurableArtifactRef:
+    """An immutable object-store or content-addressed reference owned outside Podium."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not self.value.strip():
+            raise ValueError("durable artifact reference must not be blank")
+
+
+@dataclass(frozen=True)
+class RunSessionCheckpoint:
+    """Podium's immutable pointer to one Dream-owned session checkpoint."""
+
+    checkpoint_id: int
+    workspace_id: uuid.UUID
+    run_id: uuid.UUID
+    session_id: str
+    sequence_no: int
+    snapshot_schema_version: int
+    snapshot_ref: str
+    working_dir: str | None
+    saved_at: datetime
+    usage_delta_input_tokens: int
+    usage_delta_output_tokens: int
+    usage_delta_cache_read_tokens: int
+    usage_delta_cache_write_tokens: int
+    usage_delta_cost_usd: float
+    usage_total_input_tokens: int
+    usage_total_output_tokens: int
+    usage_total_cache_read_tokens: int
+    usage_total_cache_write_tokens: int
+    usage_total_cost_usd: float
+    trace_ref: str
+    trace_event_count: int
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _checkpoint_from_row(row: RunSessionCheckpointRow) -> RunSessionCheckpoint:
+    return RunSessionCheckpoint(
+        checkpoint_id=row.checkpoint_id,
+        workspace_id=row.workspace_id,
+        run_id=row.run_id,
+        session_id=row.session_id,
+        sequence_no=row.sequence_no,
+        snapshot_schema_version=row.snapshot_schema_version,
+        snapshot_ref=row.snapshot_ref,
+        working_dir=row.working_dir,
+        saved_at=row.saved_at,
+        usage_delta_input_tokens=row.usage_delta_input_tokens,
+        usage_delta_output_tokens=row.usage_delta_output_tokens,
+        usage_delta_cache_read_tokens=row.usage_delta_cache_read_tokens,
+        usage_delta_cache_write_tokens=row.usage_delta_cache_write_tokens,
+        usage_delta_cost_usd=row.usage_delta_cost_usd,
+        usage_total_input_tokens=row.usage_total_input_tokens,
+        usage_total_output_tokens=row.usage_total_output_tokens,
+        usage_total_cache_read_tokens=row.usage_total_cache_read_tokens,
+        usage_total_cache_write_tokens=row.usage_total_cache_write_tokens,
+        usage_total_cost_usd=row.usage_total_cost_usd,
+        trace_ref=row.trace_ref,
+        trace_event_count=row.trace_event_count,
+    )
+
+
+def _same_checkpoint(
+    row: RunSessionCheckpointRow,
+    *,
+    handle: SessionHandle,
+    trace: RunTrace,
+    snapshot_ref: DurableArtifactRef,
+    trace_ref: DurableArtifactRef,
+) -> bool:
+    delta = handle.usage_delta
+    total = handle.usage_total
+    return (
+        row.snapshot_schema_version == handle.schema_version
+        and row.snapshot_ref == snapshot_ref.value
+        and row.working_dir == handle.working_dir
+        and row.usage_delta_input_tokens == delta.input_tokens
+        and row.usage_delta_output_tokens == delta.output_tokens
+        and row.usage_delta_cache_read_tokens == delta.cache_read_tokens
+        and row.usage_delta_cache_write_tokens == delta.cache_write_tokens
+        and row.usage_delta_cost_usd == delta.cost_usd
+        and row.usage_total_input_tokens == total.input_tokens
+        and row.usage_total_output_tokens == total.output_tokens
+        and row.usage_total_cache_read_tokens == total.cache_read_tokens
+        and row.usage_total_cache_write_tokens == total.cache_write_tokens
+        and row.usage_total_cost_usd == total.cost_usd
+        and row.trace_ref == trace_ref.value
+        and row.trace_event_count == len(trace.events)
+    )
+
+
+async def save_run_session_checkpoint(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    handle: SessionHandle,
+    trace: RunTrace,
+    snapshot_ref: DurableArtifactRef,
+    trace_ref: DurableArtifactRef,
+) -> RunSessionCheckpoint:
+    """Append one Dream checkpoint, returning the existing row only for an exact retry."""
+    if handle.session_id != trace.session_id:
+        raise CheckpointSessionMismatchError(
+            f"handle session {handle.session_id!r} does not match trace session {trace.session_id!r}"
+        )
+
+    # Serialize one session's append stream. The lock is held to transaction end,
+    # so sequence order is also commit order for this run/session.
+    await session.execute(
+        select(
+            func.pg_advisory_xact_lock(func.hashtextextended(f"{run_id}:{handle.session_id}", 0))
+        )
+    )
+    existing = (
+        await session.execute(
+            select(RunSessionCheckpointRow).where(
+                RunSessionCheckpointRow.run_id == run_id,
+                RunSessionCheckpointRow.session_id == handle.session_id,
+                RunSessionCheckpointRow.saved_at == handle.saved_at,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        if not _same_checkpoint(
+            existing,
+            handle=handle,
+            trace=trace,
+            snapshot_ref=snapshot_ref,
+            trace_ref=trace_ref,
+        ):
+            raise CheckpointReplayConflictError(
+                f"conflicting checkpoint replay for run {run_id} session {handle.session_id!r}"
+            )
+        return _checkpoint_from_row(existing)
+
+    next_sequence = (
+        await session.execute(
+            select(func.coalesce(func.max(RunSessionCheckpointRow.sequence_no), 0) + 1).where(
+                RunSessionCheckpointRow.run_id == run_id,
+                RunSessionCheckpointRow.session_id == handle.session_id,
+            )
+        )
+    ).scalar_one()
+    delta = handle.usage_delta
+    total = handle.usage_total
+    row = (
+        await session.execute(
+            pg_insert(RunSessionCheckpointRow)
+            .values(
+                workspace_id=workspace_id,
+                run_id=run_id,
+                session_id=handle.session_id,
+                sequence_no=next_sequence,
+                snapshot_schema_version=handle.schema_version,
+                snapshot_ref=snapshot_ref.value,
+                working_dir=handle.working_dir,
+                saved_at=handle.saved_at,
+                usage_delta_input_tokens=delta.input_tokens,
+                usage_delta_output_tokens=delta.output_tokens,
+                usage_delta_cache_read_tokens=delta.cache_read_tokens,
+                usage_delta_cache_write_tokens=delta.cache_write_tokens,
+                usage_delta_cost_usd=delta.cost_usd,
+                usage_total_input_tokens=total.input_tokens,
+                usage_total_output_tokens=total.output_tokens,
+                usage_total_cache_read_tokens=total.cache_read_tokens,
+                usage_total_cache_write_tokens=total.cache_write_tokens,
+                usage_total_cost_usd=total.cost_usd,
+                trace_ref=trace_ref.value,
+                trace_event_count=len(trace.events),
+            )
+            .returning(RunSessionCheckpointRow)
+        )
+    ).scalar_one()
+    return _checkpoint_from_row(row)
+
+
+async def list_run_session_checkpoints(
+    session: AsyncSession, *, run_id: uuid.UUID
+) -> list[RunSessionCheckpoint]:
+    """Return a run's checkpoints in append order; RLS scopes the read to its workspace."""
+    rows = (
+        (
+            await session.execute(
+                select(RunSessionCheckpointRow)
+                .where(RunSessionCheckpointRow.run_id == run_id)
+                .order_by(RunSessionCheckpointRow.checkpoint_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [_checkpoint_from_row(row) for row in rows]
 
 
 async def create_run(
@@ -172,7 +378,11 @@ async def queued_run_refs(session: AsyncSession, *, limit: int) -> list[RunRef]:
     """Queued runs awaiting a worker, oldest first. Cross-tenant — for the conductor's control-plane."""
     stmt = (
         select(
-            Run.id, Run.workspace_id, Run.company_id, Run.directive, Run.params,
+            Run.id,
+            Run.workspace_id,
+            Run.company_id,
+            Run.directive,
+            Run.params,
             Run.engine_task_id,
         )
         .where(Run.status == RunStatus.QUEUED)
@@ -182,7 +392,11 @@ async def queued_run_refs(session: AsyncSession, *, limit: int) -> list[RunRef]:
     rows = (await session.execute(stmt)).all()
     return [
         RunRef(
-            id=r[0], workspace_id=r[1], company_id=r[2], directive=r[3], params=r[4] or {},
+            id=r[0],
+            workspace_id=r[1],
+            company_id=r[2],
+            directive=r[3],
+            params=r[4] or {},
             engine_task_id=r[5],
         )
         for r in rows
