@@ -89,6 +89,25 @@ async def test_finalize_requires_the_owning_worker(
     assert run.owner is None  # lock cleared on finalize
 
 
+async def test_cancel_moves_queued_run_directly_to_canceled_and_prevents_claiming(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    app_sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+    ws_id, company_id = await _workspace_with_company(sessionmaker)
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        run, _ = await create_run(
+            s, workspace_id=ws_id, company_id=company_id, directive="d", idempotency_key="k1"
+        )
+        run_id = run.id
+        assert await request_cancel(s, run_id) is True
+        assert await claim_queued_run(s, run_id, owner="worker", lease_seconds=60) is False
+
+    async with tenant_session(app_sessionmaker, ws_id) as s:
+        canceled_run = await get_run(s, run_id)
+        assert canceled_run is not None and canceled_run.status == RunStatus.CANCELED
+        assert await request_cancel(s, run_id) is False  # already terminal
+
+
 async def test_cancel_moves_running_run_to_canceling_and_is_a_noop_when_terminal(
     sessionmaker: async_sessionmaker[AsyncSession],
     app_sessionmaker: async_sessionmaker[AsyncSession],
