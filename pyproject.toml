@@ -14,7 +14,7 @@ dependencies = [
   # The four engine repos. This package is the ONE production module allowed to import
   # both chorus and horizon (CON-001 exempts composition roots by name, not by accident).
   "dream[openai]",  # horizon's reasoner runs on dream's chat substrate (needs the SDK)
-  "chorus[postgres]",  # M5: the engine ledger runs on Postgres in podium
+  "chorus[postgres]>=0.1.1",  # M5: the engine ledger runs on Postgres in podium
   "lattice",
   "horizon[postgres]",
   # M0 backend stack.
