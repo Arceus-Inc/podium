@@ -21,7 +21,9 @@ from podium.control._direction import DirectionFacade
 from podium.control._governance import GovernanceFacade
 from podium.control._observe import ObserveFacade
 from podium.control._routines import RoutinesFacade
+from podium.control._session_state import SessionStateFacade
 from podium.control._workforce import WorkforceFacade
+from podium.evaluations import EvalRunComparisonFacade
 
 
 class CompanyControlPlane:
@@ -67,6 +69,13 @@ class CompanyControlPlane:
     @property
     def comments(self) -> CommentsFacade:
         return CommentsFacade(self._ledger)
+
+    @property
+    def evaluations(self) -> EvalRunComparisonFacade:
+        return EvalRunComparisonFacade(self._ledger)
+
+    def session_state(self) -> SessionStateFacade:
+        return SessionStateFacade(self._ledger)
 
     def close(self) -> None:
         """Release the plane's engine connection."""
