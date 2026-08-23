@@ -108,3 +108,30 @@ class RunPage(BaseModel):
     data: list[RunOut]
     meta: RunPageMeta
     links: RunPageLinks
+
+class RunSessionCheckpointOut(BaseModel):
+    """One immutable Dream session checkpoint pointer exposed by the runs API."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    checkpoint_id: int
+    workspace_id: uuid.UUID
+    run_id: uuid.UUID
+    session_id: str
+    sequence_no: int
+    snapshot_schema_version: int
+    snapshot_ref: str
+    working_dir: str | None
+    saved_at: datetime
+    usage_delta_input_tokens: int
+    usage_delta_output_tokens: int
+    usage_delta_cache_read_tokens: int
+    usage_delta_cache_write_tokens: int
+    usage_delta_cost_usd: float
+    usage_total_input_tokens: int
+    usage_total_output_tokens: int
+    usage_total_cache_read_tokens: int
+    usage_total_cache_write_tokens: int
+    usage_total_cost_usd: float
+    trace_ref: str
+    trace_event_count: int
