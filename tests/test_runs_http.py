@@ -305,7 +305,7 @@ async def test_get_run_returns_status(
     assert got.json()["status"] == "queued"
 
 
-async def test_cancel_moves_run_to_canceling(
+async def test_cancel_moves_queued_run_to_canceled(
     api: httpx.AsyncClient, sessionmaker: async_sessionmaker[AsyncSession]
 ) -> None:
     token, _workspace_id, a_company, _b = await _setup(sessionmaker)
@@ -318,7 +318,7 @@ async def test_cancel_moves_run_to_canceling(
     run_id = created.json()["id"]
     cancel = await api.post(f"/v1/runs/{run_id}/cancel", headers=headers)
     assert cancel.status_code == 200
-    assert cancel.json()["status"] == "canceling"
+    assert cancel.json()["status"] == "canceled"
 
 
 async def test_run_creation_on_foreign_company_is_not_found(
