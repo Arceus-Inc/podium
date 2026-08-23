@@ -6,12 +6,17 @@ reads run in a worker thread (the engine ledger is sync psycopg by design)."""
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import json
 import uuid
 from collections.abc import Callable
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, NoReturn, TypeVar
+from urllib.parse import urlencode
 
 from chorus.errors import OrgInvariantViolation
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, StringConstraints
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.concurrency import run_in_threadpool
@@ -24,7 +29,7 @@ from podium.control._comments import (
     UndeliverableCommentError,
 )
 from podium.control._delegation import CapacityEntry, TeamSummary
-from podium.control._direction import GoalNode
+from podium.control._direction import DecisionView, GoalNode, ProposalView, StrategyView
 from podium.control._governance import (
     PlanConflictError,
     PlanView,
@@ -94,6 +99,27 @@ async def _visible_company_or_404(
         raise HTTPException(status_code=404, detail="company not found")
 
 
+def _direction_not_found() -> NoReturn:
+    """Keep direction resource and tenancy misses indistinguishable on the wire."""
+    raise HTTPException(status_code=404, detail="resource not found")
+
+
+async def _visible_direction_company_or_404(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    actor: Actor,
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+) -> None:
+    """Direction reads deliberately make tenant/path mismatches look like missing resources."""
+    resource = Resource(kind="company", workspace_id=workspace_id, company_id=company_id)
+    if actor.workspace_id != workspace_id or not decide(actor, "read", resource):
+        _direction_not_found()
+    async with tenant_session(sessionmaker, actor.workspace_id) as session:
+        company = await get_company(session, company_id, user_id=actor.user_id)
+    if company is None:
+        _direction_not_found()
+
+
 async def _plane_read(
     provider: ControlPlaneProvider,
     *,
@@ -111,6 +137,332 @@ async def _plane_read(
             plane.close()
 
     return await run_in_threadpool(_run)
+
+
+# -- canonical Horizon direction reads ----------------------------------------------------------
+
+
+class DirectionPageMeta(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    next_cursor: str | None
+    has_more: bool
+
+
+class DirectionPageLinks(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    self: str
+    next: str | None
+
+
+class DecisionsPage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: tuple[DecisionView, ...]
+    meta: DirectionPageMeta
+    links: DirectionPageLinks
+
+
+class DirectionProposalsPage(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: tuple[ProposalView, ...]
+    meta: DirectionPageMeta
+    links: DirectionPageLinks
+
+
+class DecisionDetailLinks(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    self: str
+
+
+class DecisionDetail(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: DecisionView
+    links: DecisionDetailLinks
+
+
+class StrategySnapshotLinks(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    self: str
+
+
+class StrategySnapshotMeta(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    truncated: bool
+    total: int
+    limit: int
+
+
+class StrategySnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    data: tuple[StrategyView, ...]
+    meta: StrategySnapshotMeta
+    links: StrategySnapshotLinks
+
+
+_DirectionView = TypeVar("_DirectionView", DecisionView, ProposalView)
+DecisionStatus = Literal[
+    "proposed", "active", "paused", "done", "archived", "rejected", "superseded"
+]
+ProposalStatus = Literal["proposed", "approved", "rejected", "superseded"]
+_DECISION_QUERY_PARAMS = frozenset({"cursor", "limit", "status"})
+_PROPOSAL_QUERY_PARAMS = frozenset({"cursor", "limit", "status"})
+_STRATEGY_SNAPSHOT_LIMIT = 200
+
+
+def _encode_direction_cursor(item_id: str) -> str:
+    return base64.urlsafe_b64encode(f"direction:{item_id}".encode()).decode("ascii").rstrip("=")
+
+
+def _decode_direction_cursor(value: str) -> str:
+    """Decode only the canonical cursor emitted by this API."""
+    try:
+        padding = "=" * (-len(value) % 4)
+        raw = base64.b64decode(value + padding, altchars=b"-_", validate=True)
+        decoded = raw.decode("utf-8")
+        prefix, separator, item_id = decoded.partition(":")
+        if (
+            prefix != "direction"
+            or not separator
+            or not item_id
+            or _encode_direction_cursor(item_id) != value
+        ):
+            raise ValueError
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        raise HTTPException(status_code=422, detail="invalid cursor") from None
+    return item_id
+
+
+def _direction_page(
+    views: list[_DirectionView], *, cursor_id: str | None, limit: int, status: str | None
+) -> tuple[tuple[_DirectionView, ...], bool]:
+    """Page one in-memory repository snapshot, locating the cursor before live filtering."""
+    start = 0
+    if cursor_id is not None:
+        for index, view in enumerate(views):
+            if view.id == cursor_id:
+                start = index + 1
+                break
+        else:
+            raise HTTPException(status_code=422, detail="invalid cursor")
+    matching = [view for view in views[start:] if status is None or view.status == status]
+    return tuple(matching[:limit]), len(matching) > limit
+
+
+def _validate_direction_query(request: Request, *, allowed: frozenset[str]) -> None:
+    if set(request.query_params) - allowed:
+        raise HTTPException(status_code=422, detail="unexpected query parameter")
+    if any(len(request.query_params.getlist(name)) != 1 for name in request.query_params):
+        raise HTTPException(status_code=422, detail="repeated query parameter")
+
+
+def _direction_page_link(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    resource: Literal["decisions", "direction-proposals"],
+    *,
+    cursor: str | None,
+    limit: int,
+    status: DecisionStatus | ProposalStatus | None,
+) -> str:
+    query: list[tuple[str, str]] = []
+    if status is not None:
+        query.append(("status", status))
+    if cursor is not None:
+        query.append(("cursor", cursor))
+    query.append(("limit", str(limit)))
+    path = f"/v1/workspaces/{workspace_id}/companies/{company_id}/{resource}"
+    return f"{path}?{urlencode(query)}"
+
+
+def _decision_etag(detail: DecisionDetail) -> str:
+    """A strong validator over the complete JSON representation returned by the detail door."""
+    payload = json.dumps(detail.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return f'"{hashlib.sha256(payload.encode("utf-8")).hexdigest()}"'
+
+
+def _if_none_match_matches(value: str | None, etag: str) -> bool:
+    if value is None:
+        return False
+    return value.strip() == "*" or any(
+        validator.strip().removeprefix("W/") == etag for validator in value.split(",")
+    )
+
+
+@router.get("/decisions", response_model=DecisionsPage)
+async def decisions(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    request: Request,
+    cursor: str | None = Query(None, max_length=512),
+    limit: int = Query(50, ge=1, le=200),
+    status: DecisionStatus | None = Query(None),
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> DecisionsPage:
+    """Horizon decisions in durable repository order, using opaque continuation cursors."""
+    _validate_direction_query(request, allowed=_DECISION_QUERY_PARAMS)
+    await _visible_direction_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    cursor_id = _decode_direction_cursor(cursor) if cursor is not None else None
+    all_decisions = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.decisions(),
+    )
+    page, has_more = _direction_page(
+        all_decisions, cursor_id=cursor_id, limit=limit, status=status
+    )
+    next_cursor = _encode_direction_cursor(page[-1].id) if has_more else None
+    return DecisionsPage(
+        data=page,
+        meta=DirectionPageMeta(next_cursor=next_cursor, has_more=has_more),
+        links=DirectionPageLinks(
+            self=_direction_page_link(
+                workspace_id, company_id, "decisions", cursor=cursor, limit=limit, status=status
+            ),
+            next=(
+                _direction_page_link(
+                    workspace_id,
+                    company_id,
+                    "decisions",
+                    cursor=next_cursor,
+                    limit=limit,
+                    status=status,
+                )
+                if next_cursor is not None
+                else None
+            ),
+        ),
+    )
+
+
+@router.get("/decisions/{decision_id}", response_model=DecisionDetail)
+async def decision(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    decision_id: Annotated[str, Path(max_length=255)],
+    request: Request,
+    response: Response,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> DecisionDetail | Response:
+    """One persisted Horizon decision with a representation validator."""
+    _validate_direction_query(request, allowed=frozenset())
+    await _visible_direction_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    view = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.decision(decision_id),
+    )
+    if view is None:
+        _direction_not_found()
+    detail = DecisionDetail(
+        data=view,
+        links=DecisionDetailLinks(
+            self=f"/v1/workspaces/{workspace_id}/companies/{company_id}/decisions/{decision_id}"
+        ),
+    )
+    etag = _decision_etag(detail)
+    if _if_none_match_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    response.headers["ETag"] = etag
+    return detail
+
+
+@router.get("/direction-proposals", response_model=DirectionProposalsPage)
+async def direction_proposals(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    request: Request,
+    cursor: str | None = Query(None, max_length=512),
+    limit: int = Query(50, ge=1, le=200),
+    status: ProposalStatus | None = Query(None),
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> DirectionProposalsPage:
+    """Human-gated direction proposals in Horizon's durable insertion order."""
+    _validate_direction_query(request, allowed=_PROPOSAL_QUERY_PARAMS)
+    await _visible_direction_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    cursor_id = _decode_direction_cursor(cursor) if cursor is not None else None
+    all_proposals = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.proposals(),
+    )
+    page, has_more = _direction_page(
+        all_proposals, cursor_id=cursor_id, limit=limit, status=status
+    )
+    next_cursor = _encode_direction_cursor(page[-1].id) if has_more else None
+    return DirectionProposalsPage(
+        data=page,
+        meta=DirectionPageMeta(next_cursor=next_cursor, has_more=has_more),
+        links=DirectionPageLinks(
+            self=_direction_page_link(
+                workspace_id,
+                company_id,
+                "direction-proposals",
+                cursor=cursor,
+                limit=limit,
+                status=status,
+            ),
+            next=(
+                _direction_page_link(
+                    workspace_id,
+                    company_id,
+                    "direction-proposals",
+                    cursor=next_cursor,
+                    limit=limit,
+                    status=status,
+                )
+                if next_cursor is not None
+                else None
+            ),
+        ),
+    )
+
+
+@router.get("/strategy", response_model=StrategySnapshot)
+async def strategy(
+    workspace_id: uuid.UUID,
+    company_id: uuid.UUID,
+    request: Request,
+    actor: Actor = Depends(enforce_rate_limit),
+    sessionmaker: async_sessionmaker[AsyncSession] = Depends(get_sessionmaker),
+    provider: ControlPlaneProvider = Depends(get_control_provider),
+) -> StrategySnapshot:
+    """A bounded snapshot of Horizon's persisted per-goal strategy read model."""
+    _validate_direction_query(request, allowed=frozenset())
+    await _visible_direction_company_or_404(sessionmaker, actor, workspace_id, company_id)
+    strategies = await _plane_read(
+        provider,
+        workspace_id=workspace_id,
+        company_id=company_id,
+        read=lambda plane: plane.direction.strategies(),
+    )
+    return StrategySnapshot(
+        data=tuple(strategies[:_STRATEGY_SNAPSHOT_LIMIT]),
+        meta=StrategySnapshotMeta(
+            truncated=len(strategies) > _STRATEGY_SNAPSHOT_LIMIT,
+            total=len(strategies),
+            limit=_STRATEGY_SNAPSHOT_LIMIT,
+        ),
+        links=StrategySnapshotLinks(
+            self=f"/v1/workspaces/{workspace_id}/companies/{company_id}/strategy"
+        ),
+    )
 
 
 @router.get("/goals", response_model=list[GoalNode])

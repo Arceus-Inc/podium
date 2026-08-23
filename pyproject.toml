@@ -16,7 +16,7 @@ dependencies = [
   "dream[openai]",  # horizon's reasoner runs on dream's chat substrate (needs the SDK)
   "chorus[postgres]",  # M5: the engine ledger runs on Postgres in podium
   "lattice",
-  "horizon",
+  "horizon[postgres]",
   # M0 backend stack.
   "fastapi>=0.115",
   "sqlalchemy[asyncio]>=2.0",

@@ -92,7 +92,7 @@ class CompanyGraphHost:
                 base_url=self._base_url,
                 deployment=self._deployment,
                 workdir=self._workdir / str(company_id),  # chorus boundary: uuid → canonical text
-                company_id=str(company_id),
+                company_id=company_id,
                 ledger_dsn=self._engine_ledger_dsn,
                 # A real company runs many teams at once; the default (3) serialises an 18-person
                 # org down to a trickle and starves delegated beats. Give the heartbeat room.
