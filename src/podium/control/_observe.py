@@ -54,6 +54,44 @@ class SkillRevisionView(BaseModel):
     created_at: datetime
 
 
+class ReflectionTrajectoryView(BaseModel):
+    """One persisted run/task trajectory cited by a reflection proposal."""
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    task_id: str
+
+
+class ReflectionProposalTargetView(BaseModel):
+    """The exact owner and immutable revision a proposal would change."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    owner_employee_id: str
+    target_id: str
+    target_revision: str
+
+
+class ReflectionProposalView(BaseModel):
+    """A proposal-only visible diff with its complete provenance."""
+
+    model_config = ConfigDict(frozen=True)
+
+    artifact_id: str
+    artifact_revision_id: str
+    target: ReflectionProposalTargetView
+    diff: str
+    rationale: str
+    trajectory_refs: tuple[ReflectionTrajectoryView, ...]
+    evidence_artifact_revision_ids: tuple[str, ...]
+    source_routine_run_id: str
+    source_run_id: str
+    source_employee_id: str
+    created_at: datetime
+
+
 class OrgReport(BaseModel):
     """The inspector's combined manager+leaf rollup — flat counts for allocation decisions."""
 
@@ -90,6 +128,10 @@ class UnknownTaskError(ValueError):
 
 class UnknownSkillError(ValueError):
     """No such employee-owned skill in this company."""
+
+
+class UnknownReflectionProposalError(ValueError):
+    """No such reflection proposal revision in this company."""
 
 
 class ArtifactSummary(BaseModel):
@@ -250,6 +292,37 @@ class ObserveFacade:
             for revision in revisions
         )
 
+    def reflection_proposal(self, artifact_revision_id: str) -> ReflectionProposalView:
+        """One immutable reflection proposal with the visible diff and cited evidence."""
+        try:
+            uuid.UUID(artifact_revision_id)
+        except ValueError:
+            raise UnknownReflectionProposalError(artifact_revision_id) from None
+        proposal = self._ledger.reflection_proposals.get(artifact_revision_id)
+        if proposal is None:
+            raise UnknownReflectionProposalError(artifact_revision_id)
+        return ReflectionProposalView(
+            artifact_id=proposal.artifact_id,
+            artifact_revision_id=proposal.artifact_revision_id,
+            target=ReflectionProposalTargetView(
+                kind=proposal.target.kind.value,
+                owner_employee_id=proposal.target.owner_employee_id,
+                target_id=proposal.target.target_id,
+                target_revision=proposal.target.target_revision,
+            ),
+            diff=proposal.diff,
+            rationale=proposal.rationale,
+            trajectory_refs=tuple(
+                ReflectionTrajectoryView(run_id=reference.run_id, task_id=reference.task_id)
+                for reference in proposal.trajectory_refs
+            ),
+            evidence_artifact_revision_ids=proposal.evidence_artifact_revision_ids,
+            source_routine_run_id=proposal.source_routine_run_id,
+            source_run_id=proposal.source_run_id,
+            source_employee_id=proposal.source_employee_id,
+            created_at=_require_created_at(proposal.created_at),
+        )
+
 
 def _require_created_at(created_at: datetime | None) -> datetime:
     if created_at is None:
@@ -262,9 +335,13 @@ __all__ = [
     "CompanyStatus",
     "ObserveFacade",
     "OrgReport",
+    "ReflectionProposalTargetView",
+    "ReflectionProposalView",
+    "ReflectionTrajectoryView",
     "SkillRevisionView",
     "SkillSummary",
     "SpendRow",
+    "UnknownReflectionProposalError",
     "UnknownSkillError",
     "UnknownTaskError",
     "WhyLink",

@@ -13,6 +13,12 @@ import uuid
 import pytest
 
 from podium.control import CompanyControlPlane, ControlPlaneProvider
+from podium.control._governance import (
+    ReflectionApplicationAlreadyAuthorizedError,
+    ReflectionProposalAlreadyReviewedError,
+)
+from podium.control._observe import UnknownReflectionProposalError
+from reflection_proposal_support import create_application_run, create_reflection_proposal
 
 pytestmark = pytest.mark.anyio
 
@@ -244,6 +250,116 @@ def test_observe_facade_reads_one_skill_revision_history(
             plane.observe.skill_revisions("nobody", skill_id)
         with pytest.raises(UnknownSkillError):
             plane.observe.skill_revisions("ada", "unknown")
+    finally:
+        plane.close()
+
+
+def test_observe_facade_reads_visible_reflection_proposal_diff(
+    database_url: str,
+    provider: ControlPlaneProvider,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix="plane")
+
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        view = plane.observe.reflection_proposal(proposal.artifact_revision_id)
+        assert view.artifact_revision_id == proposal.artifact_revision_id
+        assert view.target.owner_employee_id == proposal.target.owner_employee_id
+        assert view.target.target_revision == "skill@4"
+        assert view.diff == proposal.diff
+        assert view.trajectory_refs[0].run_id == proposal.trajectory_refs[0].run_id
+        assert view.evidence_artifact_revision_ids == proposal.evidence_artifact_revision_ids
+        assert view.source_run_id == proposal.source_run_id
+        assert view.created_at is not None
+
+        with pytest.raises(UnknownReflectionProposalError):
+            plane.observe.reflection_proposal("not-a-uuid")
+        with pytest.raises(UnknownReflectionProposalError):
+            plane.observe.reflection_proposal(str(uuid.uuid4()))
+    finally:
+        plane.close()
+
+    isolated = provider.read_plane(workspace_id=workspace_id, company_id=uuid.uuid4())
+    try:
+        with pytest.raises(UnknownReflectionProposalError):
+            isolated.observe.reflection_proposal(proposal.artifact_revision_id)
+    finally:
+        isolated.close()
+
+
+@pytest.mark.parametrize("verdict", ("accepted", "rejected"))
+def test_governance_facade_records_authenticated_reflection_review(
+    database_url: str,
+    provider: ControlPlaneProvider,
+    verdict: str,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix=verdict)
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        review = plane.governance.review_reflection_proposal(
+            proposal.artifact_revision_id,
+            verdict=verdict,
+            by="founder",
+            reason="The visible diff was reviewed against its cited trajectories.",
+        )
+
+        assert review.proposal_artifact_revision_id == proposal.artifact_revision_id
+        assert review.verdict == verdict
+        assert review.reviewer_user_id == "founder"
+        assert review.created_at is not None
+
+        with pytest.raises(ReflectionProposalAlreadyReviewedError):
+            plane.governance.review_reflection_proposal(
+                proposal.artifact_revision_id,
+                verdict=verdict,
+                by="founder",
+                reason="A second final verdict must fail.",
+            )
+    finally:
+        plane.close()
+
+
+def test_governance_facade_authorizes_one_separate_application_run(
+    database_url: str,
+    provider: ControlPlaneProvider,
+) -> None:
+    workspace_id, company_id = uuid.uuid4(), uuid.uuid4()
+    proposal = create_reflection_proposal(database_url, company_id, suffix="authorization")
+    application_run = create_application_run(
+        database_url,
+        company_id,
+        suffix="authorization",
+    )
+    plane = provider.read_plane(workspace_id=workspace_id, company_id=company_id)
+    try:
+        review = plane.governance.review_reflection_proposal(
+            proposal.artifact_revision_id,
+            verdict="accepted",
+            by="founder",
+            reason="The visible diff is approved for a separate run.",
+        )
+
+        authorization = plane.governance.authorize_reflection_application(
+            proposal.artifact_revision_id,
+            application_run_id=application_run.id,
+            by="founder",
+        )
+
+        assert authorization.proposal_artifact_revision_id == proposal.artifact_revision_id
+        assert authorization.review_id == review.id
+        assert authorization.proposal_source_run_id == proposal.source_run_id
+        assert authorization.application_run_id == application_run.id
+        assert authorization.authorized_by_user_id == "founder"
+        assert authorization.created_at is not None
+
+        with pytest.raises(ReflectionApplicationAlreadyAuthorizedError):
+            plane.governance.authorize_reflection_application(
+                proposal.artifact_revision_id,
+                application_run_id=application_run.id,
+                by="founder",
+            )
     finally:
         plane.close()
 
