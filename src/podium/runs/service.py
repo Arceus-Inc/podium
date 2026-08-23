@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, case, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -208,11 +208,16 @@ async def renew_lease(
 
 
 async def request_cancel(session: AsyncSession, run_id: uuid.UUID) -> bool:
-    """Move a queued/running run to `canceling`. False if it is already terminal (or canceling)."""
+    """Cancel queued runs directly; ask their owning executor to cancel running runs."""
     stmt = (
         update(Run)
         .where(Run.id == run_id, Run.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]))
-        .values(status=RunStatus.CANCELING, updated_at=_now())
+        .values(
+            status=case(
+                (Run.status == RunStatus.QUEUED, RunStatus.CANCELED), else_=RunStatus.CANCELING
+            ),
+            updated_at=_now(),
+        )
         .returning(Run.id)
     )
     return (await session.execute(stmt)).scalar_one_or_none() is not None
